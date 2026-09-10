@@ -1,0 +1,34 @@
+# Raw dataset (download separately, see README -- ~45MB, redistribution
+# not needed since it's one click from UCI) and the intermediate
+# per-customer feature table regenerated from it by data_prep.py
+data_raw/
+data_processed/
+
+# Secrets
+.streamlit/secrets.toml
+.env
+
+# Experiment tracking -- regenerated on every train_model.py run, and not
+# needed for the app to serve predictions (only the exported model +
+# precomputed test-set artifacts under models/ are)
+mlruns/
+mlartifacts/
+
+# NOTE: models/*.joblib and models/test_*.csv ARE committed on purpose.
+# They're the small (~10MB total) production model + precomputed
+# predictions/SHAP values the Streamlit app loads at runtime -- without
+# them a "no code changes, just secrets" Streamlit Cloud deploy would have
+# no model to serve, since the 45MB raw dataset itself is intentionally
+# not in the repo. Regenerate all of models/ locally at any time with:
+#   python src/data_prep.py && python src/train_model.py && python src/explain.py
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+.ipynb_checkpoints/
+
+# OS
+.DS_Store

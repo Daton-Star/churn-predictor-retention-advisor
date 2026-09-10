@@ -1,0 +1,9 @@
+{
+  "avg_days_between_purchases":0.1262825568,
+  "tenure_days":0.1120541061,
+  "frequency":0.0752101156,
+  "monetary":0.0457853479,
+  "distinct_products":0.0447910733,
+  "avg_order_value":0.0106464946,
+  "cancellation_rate":0.0058503151
+}
