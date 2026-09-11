@@ -4,6 +4,10 @@
 data_raw/
 data_processed/
 
+# Regenerable SQLite database (rebuilt from data_raw/ by sql/build_db.py).
+# sql/QUERY_RESULTS.md -- the actual query output -- IS committed.
+sql/online_retail.db
+
 # Secrets
 .streamlit/secrets.toml
 .env
