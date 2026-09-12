@@ -292,13 +292,6 @@ Ranked by mean absolute SHAP value across the test set:
   scheduled retraining and drift checks (e.g. population stability index on
   the input features) since customer behavior — and what counts as a normal
   90-day gap — will drift over time.
-- **`google-generativeai` is deprecated.** Google has end-of-lifed this SDK
-  in favor of the unified `google-genai` package — it still works (this
-  project uses it throughout, per the original spec), but it's no longer
-  receiving updates or bug fixes. Migrating `genai_advisor.py` and
-  `rag_assistant.py` to `google-genai` is the most concrete "next PR" this
-  project has, and is a small, mechanical change (the request/response
-  shapes are similar) rather than a design change.
 
 ## 7. Tech stack
 
@@ -310,7 +303,7 @@ Ranked by mean absolute SHAP value across the test set:
 | Modeling | scikit-learn (Logistic Regression, Random Forest), XGBoost |
 | Experiment tracking | MLflow |
 | Explainability | SHAP (TreeExplainer) |
-| GenAI | Google Gemini API (`google-generativeai`, free tier) — generation + `text-embedding-004` for the RAG assistant |
+| GenAI | Google Gemini API (`google-genai`, free tier) — generation + `text-embedding-004` for the RAG assistant |
 | App | Streamlit |
 | Testing / CI | pytest, GitHub Actions |
 | Everything else | Python 3.11 |

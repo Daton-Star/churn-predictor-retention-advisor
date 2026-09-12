@@ -21,27 +21,27 @@ import rag_assistant as rag
 @pytest.fixture(autouse=True)
 def cleanup_fake_module():
     yield
-    sys.modules.pop("google.generativeai", None)
+    sys.modules.pop("google.genai", None)
 
 
 def install_fake_genai(response_text, expect_no_call=False):
     class FakeResponse:
         text = response_text
 
-    class FakeModel:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def generate_content(self, *args, **kwargs):
+    class FakeModels:
+        def generate_content(self, **kwargs):
             if expect_no_call:
                 raise AssertionError("generate_content should not be reached")
             return FakeResponse()
 
-    fake_module = types.ModuleType("google.generativeai")
-    fake_module.configure = lambda **kwargs: None
-    fake_module.GenerativeModel = FakeModel
-    fake_module.GenerationConfig = lambda **kwargs: None
-    sys.modules["google.generativeai"] = fake_module
+    class FakeClient:
+        def __init__(self, **kwargs):
+            self.models = FakeModels()
+
+    fake_module = types.ModuleType("google.genai")
+    fake_module.Client = FakeClient
+    fake_module.types = types.SimpleNamespace(GenerateContentConfig=lambda **kwargs: kwargs)
+    sys.modules["google.genai"] = fake_module
 
 
 # --- Chunking against the real committed artifacts -------------------------
@@ -129,7 +129,7 @@ def test_retrieve_ranks_by_similarity(monkeypatch):
     }
 
     def fake_embed_texts(texts, task_type):
-        assert task_type == "retrieval_query"
+        assert task_type == "RETRIEVAL_QUERY"
         return np.array([[1.0, 0.0]])  # matches chunk "a" exactly
 
     monkeypatch.setattr(rag, "embed_texts", fake_embed_texts)
@@ -192,18 +192,18 @@ def test_answer_question_generation_failure_is_caught(monkeypatch):
         lambda q, index, top_k=rag.TOP_K: [{"source": "x", "text": "relevant enough", "score": 0.9}],
     )
 
-    class BoomModel:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def generate_content(self, *args, **kwargs):
+    class BoomModels:
+        def generate_content(self, **kwargs):
             raise RuntimeError("network exploded")
 
-    fake_module = types.ModuleType("google.generativeai")
-    fake_module.configure = lambda **k: None
-    fake_module.GenerativeModel = BoomModel
-    fake_module.GenerationConfig = lambda **k: None
-    sys.modules["google.generativeai"] = fake_module
+    class BoomClient:
+        def __init__(self, **kwargs):
+            self.models = BoomModels()
+
+    fake_module = types.ModuleType("google.genai")
+    fake_module.Client = BoomClient
+    fake_module.types = types.SimpleNamespace(GenerateContentConfig=lambda **k: k)
+    sys.modules["google.genai"] = fake_module
 
     result = rag.answer_question("anything", index={"chunks": [], "vectors": np.zeros((0, 2))})
 

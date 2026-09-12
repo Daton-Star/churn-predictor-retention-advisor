@@ -64,7 +64,7 @@ from config import (
 )
 from genai_advisor import get_api_key, get_model_name
 
-EMBEDDING_MODEL = "models/text-embedding-004"
+EMBEDDING_MODEL = "text-embedding-004"
 TOP_K = 4
 # Cosine similarity is bounded [-1, 1]; 0.5 is a starting heuristic for
 # "the corpus probably doesn't cover this question," not an empirically
@@ -179,15 +179,15 @@ def build_corpus():
 
 
 def embed_texts(texts, task_type):
-    """Embed a list of strings with Gemini's embedding model.
+    """Embed a list of strings with Gemini's embedding model, in one API call.
 
-    task_type is "retrieval_document" for corpus chunks or
-    "retrieval_query" for the user's question -- Gemini's embedding API
-    optimizes the vector differently for each role, which measurably
-    improves asymmetric retrieval quality (a short question matching a
-    longer document) over embedding both the same way.
+    task_type is "RETRIEVAL_DOCUMENT" for corpus chunks or "RETRIEVAL_QUERY"
+    for the user's question -- Gemini's embedding API optimizes the vector
+    differently for each role, which measurably improves asymmetric
+    retrieval quality (a short question matching a longer document) over
+    embedding both the same way.
     """
-    import google.generativeai as genai
+    from google import genai
 
     api_key = get_api_key()
     if not api_key:
@@ -195,15 +195,19 @@ def embed_texts(texts, task_type):
             "No Gemini API key found. Set GEMINI_API_KEY as an environment "
             "variable or in .streamlit/secrets.toml -- see README."
         )
-    genai.configure(api_key=api_key)
-    vectors = [genai.embed_content(model=EMBEDDING_MODEL, content=t, task_type=task_type)["embedding"] for t in texts]
-    return np.array(vectors, dtype=np.float32)
+    client = genai.Client(api_key=api_key)
+    response = client.models.embed_content(
+        model=EMBEDDING_MODEL,
+        contents=texts,
+        config=genai.types.EmbedContentConfig(task_type=task_type),
+    )
+    return np.array([e.values for e in response.embeddings], dtype=np.float32)
 
 
 def build_index():
     """Embed the full corpus and cache it to disk. Requires a Gemini API key."""
     chunks = build_corpus()
-    vectors = embed_texts([c["text"] for c in chunks], task_type="retrieval_document")
+    vectors = embed_texts([c["text"] for c in chunks], task_type="RETRIEVAL_DOCUMENT")
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     index = {"chunks": chunks, "vectors": vectors}
     joblib.dump(index, RAG_INDEX_PATH)
@@ -228,7 +232,7 @@ def _cosine_similarity(query_vec, doc_vecs):
 def retrieve(question, index, top_k=TOP_K):
     """Return the top_k chunks most similar to the question, each with its
     cosine similarity score attached, ranked highest first."""
-    query_vec = embed_texts([question], task_type="retrieval_query")[0]
+    query_vec = embed_texts([question], task_type="RETRIEVAL_QUERY")[0]
     scores = _cosine_similarity(query_vec, index["vectors"])
     ranked_idx = np.argsort(-scores)[:top_k]
     return [{**index["chunks"][i], "score": float(scores[i])} for i in ranked_idx]
@@ -270,12 +274,15 @@ def answer_question(question, index=None, top_k=TOP_K):
                 "error": None,
             }
 
-        import google.generativeai as genai
+        from google import genai
 
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(model_name=get_model_name(), system_instruction=ANSWER_SYSTEM_INSTRUCTION)
+        client = genai.Client(api_key=api_key)
         prompt = f"Context snippets:\n{_build_context_block(retrieved)}\n\nQuestion: {question}"
-        response = model.generate_content(prompt, generation_config=genai.GenerationConfig(temperature=0.25))
+        response = client.models.generate_content(
+            model=get_model_name(),
+            contents=prompt,
+            config=genai.types.GenerateContentConfig(system_instruction=ANSWER_SYSTEM_INSTRUCTION, temperature=0.25),
+        )
 
         return {"answer": response.text.strip(), "sources": [c["source"] for c in retrieved], "error": None}
     except Exception as exc:  # noqa: BLE001 - surface any failure to the UI, don't crash it

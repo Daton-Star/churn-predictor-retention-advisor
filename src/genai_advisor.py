@@ -2,6 +2,17 @@
 explanation and a constrained retention recommendation, using the Gemini
 API free tier.
 
+WHY the `google-genai` SDK (not `google-generativeai`)
+----------------------------------------------------------
+This project originally used `google-generativeai`, the SDK Google
+shipped first. Google has since fully end-of-life'd it in favor of a
+single unified SDK, `google-genai` (`from google import genai`,
+`genai.Client(...)`) -- the old package no longer receives updates or bug
+fixes. The client-based API is also a genuine improvement here, not just
+a rename: `client.models.embed_content` accepts a *list* of texts in one
+call, so rag_assistant.py's index build does one API call for the whole
+corpus instead of one call per chunk.
+
 WHY Gemini instead of OpenAI
 ------------------------------
 This project is built on a $0 budget. Google AI Studio issues a free API
@@ -138,17 +149,15 @@ def generate_customer_explanation(customer_id, churn_probability, top_factors, m
         }
 
     try:
-        import google.generativeai as genai
+        from google import genai
 
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(
-            model_name=model_name or get_model_name(),
-            system_instruction=SYSTEM_INSTRUCTION,
-        )
+        client = genai.Client(api_key=api_key)
         prompt = _build_user_prompt(customer_id, churn_probability, top_factors)
-        response = model.generate_content(
-            prompt,
-            generation_config=genai.GenerationConfig(
+        response = client.models.generate_content(
+            model=model_name or get_model_name(),
+            contents=prompt,
+            config=genai.types.GenerateContentConfig(
+                system_instruction=SYSTEM_INSTRUCTION,
                 temperature=TEMPERATURE,
                 response_mime_type="application/json",
             ),
