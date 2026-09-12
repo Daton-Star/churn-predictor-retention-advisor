@@ -20,6 +20,7 @@ import streamlit as st
 from config import FEATURE_COLUMNS, ID_COLUMN, MODEL_PATH, SHAP_VALUES_PATH, TEST_FEATURES_PATH, TEST_PREDICTIONS_PATH
 from explain import get_top_factors
 from genai_advisor import generate_customer_explanation
+from rag_assistant import answer_question, load_or_build_index
 
 st.set_page_config(page_title="Churn Predictor & Retention Advisor", layout="wide")
 
@@ -33,30 +34,19 @@ def load_artifacts():
     return model_bundle, shap_bundle, predictions, test_features
 
 
-def main():
-    st.title("Intelligent Churn Predictor & Retention Advisor")
-    st.caption(
-        "Trained on the UCI Online Retail II dataset. Select an at-risk customer to see "
-        "the statistical factors driving their churn score, then generate a plain-English "
-        "explanation and a guarded retention recommendation with Gemini."
-    )
+@st.cache_resource
+def load_rag_index():
+    # Cached per app process: building the index costs one Gemini API call
+    # per corpus chunk (~12), which only needs to happen once whether it's
+    # loaded from a locally pre-built models/rag_index.joblib or embedded
+    # fresh on first use (e.g. a freshly deployed Streamlit Cloud app).
+    return load_or_build_index()
 
-    try:
-        model_bundle, shap_bundle, predictions, test_features = load_artifacts()
-    except FileNotFoundError:
-        st.error(
-            "Model artifacts not found. Run the pipeline first:\n\n"
-            "`python src/data_prep.py && python src/train_model.py && python src/explain.py`"
-        )
-        st.stop()
 
+def render_customer_explorer(model_bundle, shap_bundle, predictions, test_features):
     shap_df = shap_bundle["shap_values"]
 
     at_risk = predictions[predictions["y_pred"] == 1].sort_values("churn_probability", ascending=False)
-
-    st.sidebar.header("Model")
-    st.sidebar.write(f"**Algorithm:** {model_bundle['model_name']}")
-    st.sidebar.write(f"**At-risk customers in test set:** {len(at_risk):,} / {len(predictions):,}")
 
     if at_risk.empty:
         st.warning("No customers were flagged as at-risk in the test set.")
@@ -105,6 +95,70 @@ def main():
         else:
             st.success(f"**Recommended action:** {result['recommended_action']}")
             st.write(result["explanation"])
+
+
+EXAMPLE_QUESTIONS = [
+    "Which customer segment has the highest churn risk and why?",
+    "How much revenue is sitting with customers who have already churned?",
+    "What did the RFM feature engineering exclude, and why?",
+    "Which model performed best and by how much?",
+]
+
+
+def render_ask_the_analysis():
+    st.caption(
+        "Ask a free-form question about this project's own analysis. The assistant retrieves "
+        "the most relevant snippets from the SQL results, model metrics, SHAP importances, and "
+        "README findings, then answers using only those snippets -- see src/rag_assistant.py "
+        "for the retrieval + guardrail design."
+    )
+
+    question = st.text_input("Your question", placeholder=EXAMPLE_QUESTIONS[0])
+    st.caption("Examples: " + " · ".join(f"*{q}*" for q in EXAMPLE_QUESTIONS[1:]))
+
+    if st.button("Ask", type="primary") and question.strip():
+        with st.spinner("Retrieving context and calling Gemini..."):
+            try:
+                index = load_rag_index()
+                result = answer_question(question, index=index)
+            except Exception as exc:  # noqa: BLE001 - index build can fail without a valid key
+                result = {"answer": None, "sources": [], "error": f"Could not build/load the RAG index: {exc}"}
+
+        if result["error"]:
+            st.warning(f"⚠️ {result['error']}")
+        else:
+            st.success(result["answer"])
+            if result["sources"]:
+                st.caption("Sources: " + ", ".join(f"`{s}`" for s in result["sources"]))
+
+
+def main():
+    st.title("Intelligent Churn Predictor & Retention Advisor")
+    st.caption(
+        "Trained on the UCI Online Retail II dataset. Select an at-risk customer to see "
+        "the statistical factors driving their churn score, then generate a plain-English "
+        "explanation and a guarded retention recommendation with Gemini."
+    )
+
+    try:
+        model_bundle, shap_bundle, predictions, test_features = load_artifacts()
+    except FileNotFoundError:
+        st.error(
+            "Model artifacts not found. Run the pipeline first:\n\n"
+            "`python src/data_prep.py && python src/train_model.py && python src/explain.py`"
+        )
+        st.stop()
+
+    at_risk = predictions[predictions["y_pred"] == 1]
+    st.sidebar.header("Model")
+    st.sidebar.write(f"**Algorithm:** {model_bundle['model_name']}")
+    st.sidebar.write(f"**At-risk customers in test set:** {len(at_risk):,} / {len(predictions):,}")
+
+    tab1, tab2 = st.tabs(["Customer risk explorer", "Ask the analysis"])
+    with tab1:
+        render_customer_explorer(model_bundle, shap_bundle, predictions, test_features)
+    with tab2:
+        render_ask_the_analysis()
 
 
 if __name__ == "__main__":

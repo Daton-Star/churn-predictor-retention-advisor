@@ -23,6 +23,11 @@ SHAP_VALUES_PATH = MODELS_DIR / "shap_values.joblib"
 
 REPORTS_DIR = PROJECT_ROOT / "reports"
 METRICS_PATH = REPORTS_DIR / "model_comparison.json"
+FEATURE_IMPORTANCE_PATH = REPORTS_DIR / "feature_importance.json"
+
+SQL_QUERY_RESULTS_PATH = PROJECT_ROOT / "sql" / "QUERY_RESULTS.md"
+README_PATH = PROJECT_ROOT / "README.md"
+RAG_INDEX_PATH = MODELS_DIR / "rag_index.joblib"
 
 MLFLOW_TRACKING_URI = f"file:{PROJECT_ROOT / 'mlruns'}"
 MLFLOW_EXPERIMENT_NAME = "churn-predictor"

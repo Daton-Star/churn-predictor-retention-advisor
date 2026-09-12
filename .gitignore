@@ -26,6 +26,13 @@ mlartifacts/
 # not in the repo. Regenerate all of models/ locally at any time with:
 #   python src/data_prep.py && python src/train_model.py && python src/explain.py
 
+# The RAG index is the one models/ artifact NOT committed: building it
+# requires a Gemini API key (to embed the corpus), which isn't available
+# at commit time. app.py builds and caches it on first use instead (see
+# rag_assistant.load_or_build_index()), so a deploy never needs this file
+# to exist ahead of time.
+models/rag_index.joblib
+
 # Python
 __pycache__/
 *.pyc

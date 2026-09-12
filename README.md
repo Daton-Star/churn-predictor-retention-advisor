@@ -9,10 +9,10 @@ using Google's Gemini API — built entirely on free tools.
 
 ## Screenshots
 
-| Customer risk dashboard | Guardrail in action |
-|---|---|
-| ![App dashboard: at-risk customer dropdown, churn probability, and SHAP risk factor table](screenshots/app_dashboard.png) | ![Gemini section flagging a missing API key for manual review instead of failing silently](screenshots/app_gemini_response.png) |
-| Select any at-risk customer to see their churn probability and top SHAP risk factors. | The right screenshot shows the guardrail path (no API key configured) rather than a live Gemini call — add your own key (setup below) to see a real generated explanation and recommendation. |
+| Customer risk dashboard | Guardrail in action | Ask the analysis (RAG) |
+|---|---|---|
+| ![App dashboard: at-risk customer dropdown, churn probability, and SHAP risk factor table](screenshots/app_dashboard.png) | ![Gemini section flagging a missing API key for manual review instead of failing silently](screenshots/app_gemini_response.png) | ![The RAG assistant tab, with example questions and an input box](screenshots/app_rag_tab.png) |
+| Select any at-risk customer to see their churn probability and top SHAP risk factors. | The middle screenshot shows the guardrail path (no API key configured) rather than a live Gemini call — add your own key (setup below) to see a real generated explanation and recommendation. | Ask a free-form question about the project's own analysis; answers are grounded in retrieved context, same honesty note as above applies. |
 
 ## 1. Business problem
 
@@ -150,6 +150,35 @@ shown to the user as such rather than silently passed through. Temperature
 is set to 0.25: this tool informs a real retention action, so consistency
 matters more than creative variety.
 
+### RAG Q&A assistant
+
+A second, separate GenAI feature ([`src/rag_assistant.py`](src/rag_assistant.py)):
+free-form questions like *"which customer segment has the highest churn
+risk and why?"* against the project's own generated analysis — the SQL
+query results, model evaluation metrics, SHAP feature importances, and the
+README's own findings — rather than requiring someone to go read four
+different files.
+
+- **Corpus**: ~12 short chunks assembled from `sql/QUERY_RESULTS.md`,
+  `reports/model_comparison.json`, `reports/feature_importance.json`, and
+  three analytical sections of this README (business problem, key
+  findings, limitations) — deliberately excludes setup/deployment
+  instructions, which aren't answers to analytical questions.
+- **Retrieval**: each chunk is embedded once with Gemini's free-tier
+  `text-embedding-004` model and cached to disk; a question is embedded
+  the same way and matched by brute-force cosine similarity (no vector
+  DB — a dozen 768-dim vectors is microseconds in numpy, and a vector
+  database would be infrastructure with no payoff at this scale).
+- **Guardrail**: if the best-matching chunk's similarity score is below a
+  threshold, the assistant answers "I don't have enough information in
+  this project's analysis" *without ever calling the generation model* —
+  same philosophy as the action guardrail above: an ungrounded but
+  fluent-sounding answer is worse than no answer.
+
+Try it in the app's **"Ask the analysis"** tab, or from the CLI:
+`python src/rag_assistant.py` (builds the index, then runs one example
+question end-to-end).
+
 ## 3. Model comparison
 
 5-fold stratified cross-validation on the training set (4,702 customers):
@@ -263,6 +292,13 @@ Ranked by mean absolute SHAP value across the test set:
   scheduled retraining and drift checks (e.g. population stability index on
   the input features) since customer behavior — and what counts as a normal
   90-day gap — will drift over time.
+- **`google-generativeai` is deprecated.** Google has end-of-lifed this SDK
+  in favor of the unified `google-genai` package — it still works (this
+  project uses it throughout, per the original spec), but it's no longer
+  receiving updates or bug fixes. Migrating `genai_advisor.py` and
+  `rag_assistant.py` to `google-genai` is the most concrete "next PR" this
+  project has, and is a small, mechanical change (the request/response
+  shapes are similar) rather than a design change.
 
 ## 7. Tech stack
 
@@ -274,7 +310,7 @@ Ranked by mean absolute SHAP value across the test set:
 | Modeling | scikit-learn (Logistic Regression, Random Forest), XGBoost |
 | Experiment tracking | MLflow |
 | Explainability | SHAP (TreeExplainer) |
-| GenAI | Google Gemini API (`google-generativeai`, free tier) |
+| GenAI | Google Gemini API (`google-generativeai`, free tier) — generation + `text-embedding-004` for the RAG assistant |
 | App | Streamlit |
 | Testing / CI | pytest, GitHub Actions |
 | Everything else | Python 3.11 |
@@ -344,6 +380,17 @@ python sql/build_db.py     # -> sql/online_retail.db
 python sql/run_queries.py  # -> sql/QUERY_RESULTS.md
 ```
 
+### Build the RAG index (optional)
+
+Not required before running the app — it builds the index itself on first
+use of the "Ask the analysis" tab (and caches it for the rest of that
+process). Running it up front just avoids that first-question delay and
+lets you try it from the CLI:
+
+```bash
+python src/rag_assistant.py   # -> models/rag_index.joblib + one example Q&A
+```
+
 ## Testing & CI
 
 ```bash
@@ -351,13 +398,16 @@ pip install -r requirements-dev.txt
 python -m pytest tests/ -v
 ```
 
-18 tests cover the churn-label/RFM logic (`tests/test_data_prep.py`), the
-SHAP factor-ranking logic (`tests/test_explain.py`), and the Gemini
-guardrail — valid actions, invalid actions, missing keys, and API failures
-all resolving to a safe, non-crashing result (`tests/test_genai_advisor.py`).
-All three suites run against small hand-built synthetic data, not the raw
-dataset, so they run in seconds and don't require `data_raw/` to exist —
-including in CI, which runs them via GitHub Actions
+31 tests cover the churn-label/RFM logic (`tests/test_data_prep.py`), the
+SHAP factor-ranking logic (`tests/test_explain.py`), the Gemini action
+guardrail (`tests/test_genai_advisor.py`), and the RAG assistant's chunking,
+cosine-similarity ranking, and grounding guardrail
+(`tests/test_rag_assistant.py`) — valid actions, invalid actions, missing
+keys, low-similarity refusals, and API failures all resolving to a safe,
+non-crashing result. All four suites run against small hand-built synthetic
+data (or the real, small, already-committed `sql/`/`reports/` artifacts —
+never the 45MB raw dataset), so they run in a couple of seconds and never
+call a real LLM — including in CI, which runs them via GitHub Actions
 ([`.github/workflows/tests.yml`](.github/workflows/tests.yml)) on every push
 and pull request.
 
@@ -401,7 +451,8 @@ and pull request.
 │   ├── train_model.py      # Stage 2: model comparison, selection, MLflow logging
 │   ├── explain.py          # Stage 3: SHAP per-customer explanations
 │   ├── genai_advisor.py    # Stage 4: Gemini explanation + guardrailed action
-│   └── app.py               # Streamlit UI
+│   ├── rag_assistant.py    # RAG Q&A over the project's own analysis
+│   └── app.py               # Streamlit UI (customer explorer + RAG tab)
 ├── .streamlit/
 │   └── secrets.toml.example
 ├── requirements.txt
