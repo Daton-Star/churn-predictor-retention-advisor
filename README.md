@@ -2,6 +2,8 @@
 
 [![tests](https://github.com/Daton-Star/churn-predictor-retention-advisor/actions/workflows/tests.yml/badge.svg)](https://github.com/Daton-Star/churn-predictor-retention-advisor/actions/workflows/tests.yml)
 
+**🔴 [Live demo](https://churn-predictor-retention-advisor-w2rdhndvxpuzwkpqnc7rkw.streamlit.app/)** — deployed free on Streamlit Community Cloud.
+
 An end-to-end churn prediction system for an online retailer: it predicts
 *which* customers are about to churn, explains *why* using SHAP, and turns
 that explanation into a plain-English, guardrailed retention recommendation
@@ -406,13 +408,19 @@ and pull request.
 
 ## Deployment (Streamlit Community Cloud, free)
 
+**Already live:** [churn-predictor-retention-advisor-w2rdhndvxpuzwkpqnc7rkw.streamlit.app](https://churn-predictor-retention-advisor-w2rdhndvxpuzwkpqnc7rkw.streamlit.app/)
+
+To deploy your own copy:
+
 1. Push this repo to GitHub (raw data and secrets stay out — see
    `.gitignore`; the trained model + precomputed test-set artifacts under
    `models/` **are** committed on purpose so the app has something to serve
    without re-running the pipeline against the excluded raw dataset).
 2. Go to [share.streamlit.io](https://share.streamlit.io), connect your
    GitHub account, and deploy this repo with **`src/app.py`** as the main
-   file path.
+   file path. `runtime.txt` pins the Python version (3.11) so Streamlit
+   Cloud doesn't default to one the pinned dependency versions weren't
+   tested against.
 3. In the app's **Settings → Secrets**, add:
    ```toml
    GEMINI_API_KEY = "your-key-here"
@@ -450,5 +458,6 @@ and pull request.
 │   └── secrets.toml.example
 ├── requirements.txt
 ├── requirements-dev.txt
+├── runtime.txt              # pins Python 3.11 for Streamlit Community Cloud
 └── README.md
 ```
