@@ -24,8 +24,8 @@ WHY Gemini embeddings + brute-force cosine similarity, not a vector DB
 ------------------------------------------------------------------------
 With ~12 chunks, a vector database (Pinecone/Chroma/FAISS) is
 infrastructure with no payoff -- cosine similarity against a dozen
-768-dim vectors is microseconds in numpy. The embeddings come from
-Gemini's free-tier `text-embedding-004` model (via the same API key as
+vectors is microseconds in numpy. The embeddings come from Gemini's
+free-tier `gemini-embedding-001` model (via the same API key as
 genai_advisor.py) so retrieval is genuinely semantic: a question phrased
 as "who's most likely to leave" should still match chunks about "churn
 risk," which plain keyword search would miss.
@@ -64,7 +64,10 @@ from config import (
 )
 from genai_advisor import get_api_key, get_model_name
 
-EMBEDDING_MODEL = "text-embedding-004"
+# Google retired text-embedding-004 on the Gemini Developer API (v1beta,
+# the endpoint a plain aistudio.google.com API key hits) -- it now 404s.
+# gemini-embedding-001 is the current text-embedding model there.
+EMBEDDING_MODEL = "gemini-embedding-001"
 TOP_K = 4
 # Cosine similarity is bounded [-1, 1]; 0.5 is a starting heuristic for
 # "the corpus probably doesn't cover this question," not an empirically

@@ -167,9 +167,9 @@ different files.
   findings, limitations) — deliberately excludes setup/deployment
   instructions, which aren't answers to analytical questions.
 - **Retrieval**: each chunk is embedded once with Gemini's free-tier
-  `text-embedding-004` model and cached to disk; a question is embedded
+  `gemini-embedding-001` model and cached to disk; a question is embedded
   the same way and matched by brute-force cosine similarity (no vector
-  DB — a dozen 768-dim vectors is microseconds in numpy, and a vector
+  DB — a dozen vectors is microseconds in numpy, and a vector
   database would be infrastructure with no payoff at this scale).
 - **Guardrail**: if the best-matching chunk's similarity score is below a
   threshold, the assistant answers "I don't have enough information in
@@ -305,7 +305,7 @@ Ranked by mean absolute SHAP value across the test set:
 | Modeling | scikit-learn (Logistic Regression, Random Forest), XGBoost |
 | Experiment tracking | MLflow |
 | Explainability | SHAP (TreeExplainer) |
-| GenAI | Google Gemini API (`google-genai`, free tier) — generation + `text-embedding-004` for the RAG assistant |
+| GenAI | Google Gemini API (`google-genai`, free tier) — generation + `gemini-embedding-001` for the RAG assistant |
 | App | Streamlit |
 | Testing / CI | pytest, GitHub Actions |
 | Everything else | Python 3.11 |
