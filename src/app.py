@@ -25,6 +25,20 @@ from rag_assistant import answer_question, load_or_build_index
 st.set_page_config(page_title="Churn Predictor & Retention Advisor", layout="wide")
 
 
+def _escape_markdown_dollars(text):
+    """Escape literal '$' in LLM-generated text before handing it to
+    Streamlit's markdown renderer.
+
+    Gemini's answers often cite dollar figures (e.g. "$3,462,227 in
+    revenue"). Streamlit renders markdown through MathJax, which treats a
+    matched pair of unescaped '$' as inline LaTeX -- two dollar amounts in
+    one sentence get silently parsed as a math expression instead of shown
+    as text. Escaping to '\\$' keeps the literal dollar sign without
+    triggering math mode.
+    """
+    return text.replace("$", r"\$") if text else text
+
+
 @st.cache_resource
 def load_artifacts():
     model_bundle = joblib.load(MODEL_PATH)
@@ -91,10 +105,10 @@ def render_customer_explorer(model_bundle, shap_bundle, predictions, test_featur
         if result["needs_manual_review"]:
             st.warning(f"⚠️ Flagged for manual review: {result['error']}")
             if result["explanation"]:
-                st.write(f"**Model's explanation (unvalidated):** {result['explanation']}")
+                st.write(f"**Model's explanation (unvalidated):** {_escape_markdown_dollars(result['explanation'])}")
         else:
             st.success(f"**Recommended action:** {result['recommended_action']}")
-            st.write(result["explanation"])
+            st.write(_escape_markdown_dollars(result["explanation"]))
 
 
 EXAMPLE_QUESTIONS = [
@@ -127,7 +141,7 @@ def render_ask_the_analysis():
         if result["error"]:
             st.warning(f"⚠️ {result['error']}")
         else:
-            st.success(result["answer"])
+            st.success(_escape_markdown_dollars(result["answer"]))
             if result["sources"]:
                 st.caption("Sources: " + ", ".join(f"`{s}`" for s in result["sources"]))
 
