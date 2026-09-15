@@ -9,6 +9,12 @@ An end-to-end churn prediction system for an online retailer: it predicts
 that explanation into a plain-English, guardrailed retention recommendation
 using Google's Gemini API — built entirely on free tools.
 
+## Demo
+
+![Walkthrough: switching between at-risk customers, viewing SHAP risk factors, generating a Gemini retention recommendation, and asking a free-form question in the RAG-powered "Ask the analysis" tab](screenshots/app_demo.gif)
+
+*Recorded against a local run with no Gemini API key set, so it shows the guardrail path (the app flags for manual review instead of failing silently or inventing an answer) — see [Screenshots](#screenshots) below and the setup steps for what a live Gemini response looks like.*
+
 ## Screenshots
 
 | Customer risk dashboard | Guardrail in action | Ask the analysis (RAG) |
