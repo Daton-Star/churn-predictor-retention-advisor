@@ -79,9 +79,9 @@ MIN_SIMILARITY = 0.5
 # setup and deployment instructions aren't answers to analytical
 # questions this assistant is meant to field.
 README_SECTIONS_TO_INDEX = {
-    "1. Business problem",
-    "4. Key findings — top churn drivers",
-    "6. Limitations and what I'd do with more time",
+    "Why this project",
+    "Key findings — top churn drivers",
+    "Limitations and what I'd do with more time",
 }
 
 ANSWER_SYSTEM_INSTRUCTION = (

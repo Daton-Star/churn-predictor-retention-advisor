@@ -1,20 +1,68 @@
 # Intelligent Churn Predictor & Retention Advisor
 
 [![tests](https://github.com/Daton-Star/churn-predictor-retention-advisor/actions/workflows/tests.yml/badge.svg)](https://github.com/Daton-Star/churn-predictor-retention-advisor/actions/workflows/tests.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](runtime.txt)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://churn-predictor-retention-advisor-w2rdhndvxpuzwkpqnc7rkw.streamlit.app/)
 
-**🔴 [Live demo](https://churn-predictor-retention-advisor-w2rdhndvxpuzwkpqnc7rkw.streamlit.app/)** — deployed free on Streamlit Community Cloud.
+**Predicts which customers are about to churn, explains why with SHAP, and turns that into a guardrailed, dollar-quantified retention recommendation — live on Streamlit Community Cloud.**
 
-An end-to-end churn prediction system for an online retailer: it predicts
-*which* customers are about to churn, explains *why* using SHAP, and turns
-that explanation into a plain-English, guardrailed retention recommendation
-using Google's Gemini API — built entirely on free tools.
+**🔴 [Live demo](https://churn-predictor-retention-advisor-w2rdhndvxpuzwkpqnc7rkw.streamlit.app/)**
 
-## Demo
+![Walkthrough: switching between at-risk customers, viewing the SHAP risk factors, generating a Gemini retention recommendation, and asking a free-form question in the RAG-powered "Ask the Analyst" page](screenshots/app_demo.gif)
 
-![Walkthrough: switching between at-risk customers, viewing SHAP risk factors, generating a Gemini retention recommendation, and asking a free-form question in the RAG-powered "Ask the Analyst" page](screenshots/app_demo.gif)
+<img src="screenshots/app_roi_calculator.png" alt="Estimated ROI of intervening: a retention-action dropdown, editable cost, an effectiveness slider, and the resulting expected value in dollars" width="640">
 
-*Recorded against a local run with no Gemini API key set, so it shows the guardrail path (the app flags for manual review instead of failing silently or inventing an answer) — see [Screenshots](#screenshots) below and the setup steps for what a live Gemini response looks like.*
+*The GIF above is recorded with no Gemini API key set, so it shows the guardrail path (flags for manual review instead of failing silently or inventing an answer) — see [Screenshots](#screenshots) for the full gallery and the setup steps for what a live Gemini response looks like.*
+
+## Results
+
+| Metric (held-out test set, 1,176 customers) | Score |
+|---|---|
+| **AUC-ROC** | **0.913** |
+| F1 | 0.831 |
+| Precision | 0.815 |
+| Recall | 0.848 |
+
+**Best model:** Random Forest, selected by 5-fold CV AUC-ROC over Logistic Regression and XGBoost — full comparison in [Model comparison](#model-comparison).
+
+**Business impact:** a classification score alone doesn't tell anyone whether acting on it is worth the money. The app's **Estimated ROI of intervening** calculator turns each flagged customer into a dollar decision (`effectiveness × churn probability × lifetime value − cost`, every input editable) instead of leaving that math to a spreadsheet later — detail in [Business impact framing](#business-impact-framing).
+
+## Why this project
+
+**TL;DR:** a repeat-purchase retailer has no "cancel" button to watch for — by the time a customer is obviously gone, it's too late to intervene. This project answers three questions a retention team actually needs answered, in an order a non-technical reader can follow:
+
+1. **Who** is likely to go quiet in the near future?
+2. **Why** — in terms a non-technical account rep can act on, not a coefficient table?
+3. **What should we do about it, and is it worth doing** — one concrete, budget-appropriate action with a dollar estimate attached, not an open-ended AI ramble?
+
+Two design choices exist specifically to keep those answers trustworthy, not just accurate:
+
+- **RFM-based labeling, not a guess.** The dataset has no churn label — it's raw transactions. Rather than picking a churn-window threshold arbitrarily, this project derives one from the actual distribution of gaps between a customer's repeat purchases (see [Data → churn label engineering](#data--churn-label-engineering)), so "90 days of silence" reflects this business's real shopping cadence rather than an industry rule of thumb.
+- **The AI step is guarded, not trusted.** Asked to "recommend a retention action" in free text, an LLM will happily invent plausible-sounding but operationally meaningless suggestions. Here, Gemini is restricted to picking one action from a fixed list a retention team can actually execute — and the response is checked in code afterward, because a prompt instruction alone doesn't bind a model. Anything else is flagged for manual review instead of silently shown to a business user.
+
+## How it works
+
+```
+Raw transactions (UCI Online Retail II, ~1M rows)
+        │  data_prep.py       -- clean + engineer an RFM churn label
+        ▼
+Cleaned transactions → RFM churn label + per-customer features
+        │  train_model.py     -- compare 3 models, 5-fold CV, SMOTE-in-fold
+        ▼
+LogReg / Random Forest / XGBoost → best model by AUC-ROC
+        │  explain.py         -- exact per-customer Shapley values
+        ▼
+SHAP TreeExplainer → top risk factors per customer
+        │  genai_advisor.py   -- explanation + code-validated guardrail
+        ▼
+Gemini → 2-sentence explanation + one guardrailed action
+        │  app.py             -- 5-page Streamlit dashboard
+        ▼
+Streamlit UI: risk gauge, ROI calculator, segment analysis, model insights, RAG Q&A
+```
+
+Full rationale for each stage — including the SQL cross-check, the RAG assistant, and the UI's design system — is in [Methodology](#methodology) below.
 
 ## Screenshots
 
@@ -35,40 +83,10 @@ The app is a small sidebar-navigated dashboard, not a single script with tabs: a
 | ![Estimated ROI of intervening: a retention-action dropdown, editable cost, an effectiveness slider, and the resulting expected value in dollars](screenshots/app_roi_calculator.png) | ![Segment Analysis page: churn rate by country and revenue by recency-risk tier, both bar charts computed from the SQL layer, in the app's neutral brand blue](screenshots/app_segments.png) | ![Model Insights page: precision and recall curves against decision threshold in blue/slate, a threshold slider, and the resulting confusion matrix](screenshots/app_model_performance.png) |
 | Turns a SHAP-explained risk score into a dollar decision: expected value = effectiveness × churn probability × lifetime value − cost, with every assumption an editable input. | The SQL layer's country and recency-tier breakdowns ([`sql/`](sql/)), rendered live in the app instead of sitting in a separate folder. Color here is neutral brand blue throughout — magnitude only, never confused with risk severity. | The model's 0.5 default threshold is a business choice, not a statistical fact — this page makes the precision/recall tradeoff explorable instead of implicit. |
 
-## 1. Business problem
+## Methodology
 
-Retention teams at subscription-free, repeat-purchase retailers (gift shops,
-e-commerce, consumer goods) can't wait for a customer to formally "cancel" —
-there's no cancellation event to watch for. By the time a customer is
-obviously gone, it's too late to intervene. This project answers three
-questions a retention team actually needs answered, in order:
-
-1. **Who** is likely to go quiet in the near future?
-2. **Why** — in terms a non-technical account rep can act on, not a
-   coefficient table?
-3. **What should we do about it** — one concrete, budget-appropriate action,
-   not an open-ended AI ramble?
-
-## 2. Approach
-
-```
-Raw transactions (UCI Online Retail II, ~1M rows)
-        │  data_prep.py
-        ▼
-Cleaned transactions → RFM churn label + per-customer features
-        │  train_model.py
-        ▼
-LogReg / Random Forest / XGBoost, 5-fold CV, SMOTE (train only) → best model
-        │  explain.py
-        ▼
-SHAP TreeExplainer → top factors per customer
-        │  genai_advisor.py
-        ▼
-Gemini → 2-sentence explanation + guardrailed action
-        │  app.py
-        ▼
-Streamlit UI
-```
+The full pipeline is diagrammed in [How it works](#how-it-works) above — this
+section is the detailed rationale behind each stage.
 
 ### Data → churn label engineering
 
@@ -94,6 +112,33 @@ builds one:
   above normal shopping cadence, so it flags genuinely unusual silence
   rather than penalizing customers who simply buy quarterly.
 
+### Train/test split & leakage checks
+
+- **Split: stratified 80/20, random — not time-based.** This matters
+  because the underlying data is genuinely time-series (transactions from
+  Dec 2009 to Dec 2011): a random split draws train and test customers from
+  the *same* period rather than testing "trained on earlier behavior, does
+  it predict later churn." That's a real limitation, called out again in
+  [Limitations](#limitations-and-what-id-do-with-more-time), not an
+  oversight — the correct validation with more time is a rolling-origin
+  time split (train on 2009–2010 behavior, predict 2011 churn).
+- **Leakage check performed, and it caught a real bug.** `recency_days`
+  (days since last purchase) was initially included as a model feature and
+  produced a suspicious **1.00 AUC-ROC across all three models** — the tell
+  that it mechanically defines the churn label itself
+  (`churned = recency_days > 90`), so including it let the model "solve"
+  the label instead of learning the underlying behavior (falling frequency,
+  narrowing product range) that predicts churn *before* recency crosses the
+  threshold. Removed from `FEATURE_COLUMNS` before any result was reported;
+  still computed and displayed in the app (e.g. "last purchased 45 days
+  ago") since dropping it from training doesn't mean dropping it from the
+  UI.
+- **SMOTE leakage check.** Oversampling is wired into an
+  `imbalanced-learn` `Pipeline` so it's refit inside each individual
+  cross-validation fold, never applied before the train/test split — a
+  common mistake that lets synthetic points leak across the split boundary
+  and inflates every downstream metric.
+
 ### Features engineered
 
 | Feature | Description |
@@ -105,25 +150,10 @@ builds one:
 | `tenure_days` | Days since first purchase |
 | `avg_days_between_purchases` | Average gap between orders (dataset-median-filled for single-order customers) |
 | `cancellation_rate` | Share of a customer's invoices that were cancellations |
-| `recency_days` | *Computed but deliberately excluded from the model* — see below |
-
-**Why `recency_days` is not a model feature:** the churn label is *defined*
-as `recency_days > 90`. Feeding recency into the model would let it "solve"
-the problem by memorizing the labeling rule instead of learning the
-underlying behavioral pattern (falling frequency, narrowing product range,
-etc.) that actually predicts churn. This was caught during development —
-the first training run scored a suspicious 1.00 AUC across all three
-models, which was the tell. `recency_days` is still computed and stored for
-display purposes (e.g. "last purchased 45 days ago" in the app).
+| `recency_days` | *Computed but deliberately excluded from the model* — see above |
 
 ### Modeling
 
-- Stratified 80/20 train/test split.
-- **SMOTE on training folds only**, wired in via an `imbalanced-learn`
-  `Pipeline` so it's refit inside each individual cross-validation fold —
-  never on a validation fold or the held-out test set. Oversampling before
-  splitting (a common mistake) lets synthetic points leak information
-  across the split and inflates every metric.
 - 5-fold stratified CV comparing Logistic Regression (baseline), Random
   Forest, and XGBoost on AUC-ROC, F1, precision, and recall.
 - **Selection metric: AUC-ROC**, not accuracy — accuracy rewards predicting
@@ -231,7 +261,7 @@ Try it in the app's **"Ask the Analyst"** page, or from the CLI:
 `python src/rag_assistant.py` (builds the index, then runs one example
 question end-to-end).
 
-## 3. Model comparison
+## Model comparison
 
 5-fold stratified cross-validation on the training set (4,702 customers):
 
@@ -263,7 +293,7 @@ Confusion matrix (test set):
 real dataset — reproducible via the fixed random seed in `src/config.py`.
 Re-run `python src/train_model.py` to regenerate `reports/model_comparison.json`.)*
 
-## 4. Key findings — top churn drivers
+## Key findings — top churn drivers
 
 Ranked by mean absolute SHAP value across the test set:
 
@@ -288,7 +318,7 @@ Ranked by mean absolute SHAP value across the test set:
    a small number of high-volume wholesale accounts rather than being a
    broad-based dissatisfaction signal.
 
-## 5. Business impact framing
+## Business impact framing
 
 A statistical score ("84.8% recall") doesn't tell a business user whether
 acting on it is worth the money. The app's **Estimated ROI of intervening**
@@ -303,12 +333,14 @@ expected value = effectiveness × churn probability × lifetime value − cost
 - **Lifetime value** uses the customer's historical spend (`monetary`) as a
   proxy for the revenue preserved if they're retained.
 - **Effectiveness** — how often a given action (discount, support call,
-  loyalty upgrade, ...) actually retains an at-risk customer — is not
-  something this project has real campaign data for, so it's an editable
-  slider (default 20%), not a hardcoded number. That's deliberate: a real
-  analyst would plug in their own historical win-back rate here, and the
-  point of the tool is to make that assumption explicit and adjustable
-  rather than buried in a spreadsheet formula.
+  loyalty upgrade, ...) actually retains an at-risk customer — is **not
+  something this project has real campaign data for, and is never
+  presented as a learned or measured number.** It's a plain editable slider
+  (default 20%), supplied by whoever is using the tool, not inferred by the
+  model. That's deliberate: a real analyst would plug in their own
+  historical win-back rate here, and the point of the tool is to make that
+  assumption explicit and adjustable rather than buried in a spreadsheet
+  formula or silently hardcoded.
 - **Cost** defaults to an illustrative per-action placeholder
   (`DEFAULT_ACTION_COST` in `src/app.py`) and is also editable.
 
@@ -324,7 +356,7 @@ imply `(506 × 0.20 × avg. monetary) − (621 × $15)` — plug in real
 numbers for your business via the app rather than trusting a single
 worked example here.
 
-## 6. Limitations and what I'd do with more time
+## Limitations and what I'd do with more time
 
 - **Right-censored label.** A customer who bought yesterday is labeled
   "not churned" only because the dataset ends before we can observe them
@@ -332,11 +364,12 @@ worked example here.
   about to churn just outside the observation window. A proper survival-
   analysis framing (time-to-churn, censoring-aware) would handle this more
   rigorously than a binary snapshot label.
-- **Single train/test split.** One 80/20 split, not a repeated or
-  time-based backtest. With more time I'd validate with a rolling-origin
-  time split (train on 2009–2010 behavior, predict 2011 churn) to check the
-  model generalizes forward in time, not just to a random held-out sample
-  from the same period.
+- **Single, random train/test split.** One 80/20 split, not a repeated or
+  time-based backtest — see [Train/test split & leakage checks](#traintest-split--leakage-checks)
+  above. With more time I'd validate with a rolling-origin time split
+  (train on 2009–2010 behavior, predict 2011 churn) to check the model
+  generalizes forward in time, not just to a random held-out sample from
+  the same period.
 - **No hyperparameter search.** Model hyperparameters are reasonable
   defaults, not tuned (e.g. via `GridSearchCV`/`Optuna`). Given the healthy
   AUC gap between models, tuning would likely yield a smaller improvement
@@ -348,6 +381,13 @@ worked example here.
   but fluent-sounding *explanation* (as opposed to an invalid *action*)
   would currently reach the user. A stricter version would also constrain
   or template the explanation text itself.
+- **ROI effectiveness is user-supplied, not learned.** Worth repeating here
+  as its own limitation, not just a caveat in the ROI section: nothing in
+  this project measures whether a "send discount offer" actually retains
+  customers. The number is a deliberately exposed assumption, not a model
+  output — with real campaign data, the honest next step would be to
+  estimate it (e.g. via an uplift model or a historical win-back rate by
+  action), not just widen the slider's plausible range.
 - **Single retailer, single country dominant, 2009–2011.** The UK-heavy,
   gift-retail-specific dataset limits how far these exact feature
   importances generalize to a different business; the pipeline (label
@@ -358,7 +398,7 @@ worked example here.
   the input features) since customer behavior — and what counts as a normal
   90-day gap — will drift over time.
 
-## 7. Tech stack
+## Tech stack
 
 | Layer | Tool |
 |---|---|
@@ -376,7 +416,7 @@ worked example here.
 Every tool above is free (open source, or a free API tier with no credit
 card required).
 
-## 8. Setup and run instructions
+## Setup and run instructions
 
 ### Prerequisites
 
@@ -398,7 +438,8 @@ pip install -r requirements.txt
 Download the dataset from the [UCI Online Retail II page](https://archive.ics.uci.edu/dataset/502/online+retail+ii)
 and save the Excel file as `data_raw/online_retail_II.xlsx` (create the
 `data_raw/` folder if it doesn't exist). The file is ~45MB and is not
-included in this repo.
+included in this repo — see [Project structure](#project-structure) for
+which generated artifacts *are* committed instead.
 
 ### Run the pipeline
 
@@ -412,14 +453,26 @@ python explain.py        # -> models/shap_values.joblib
 Inspect experiment runs with `mlflow ui --backend-store-uri file:../mlruns`
 from the `src/` directory.
 
-### Configure your Gemini key locally
+### Secrets
+
+The Gemini API key is **never hardcoded or committed**. `genai_advisor.get_api_key()`
+resolves it at runtime in this order: `st.secrets["GEMINI_API_KEY"]` first
+(so the same code works unmodified once deployed to Streamlit Community
+Cloud, which injects secrets into `st.secrets`), falling back to the
+`GEMINI_API_KEY` environment variable (so local development and the CLI
+scripts work without Streamlit at all). `.streamlit/secrets.toml` — the
+only place a real key would ever live locally — is git-ignored; only
+`.streamlit/secrets.toml.example` (a template with no real key) is
+committed.
+
+To configure your key locally, either:
 
 ```bash
 cp .streamlit/secrets.toml.example .streamlit/secrets.toml
 # edit .streamlit/secrets.toml and paste your real key
 ```
 
-Or, without Streamlit's secrets file, just export an environment variable:
+or, without Streamlit's secrets file, just export an environment variable:
 
 ```bash
 export GEMINI_API_KEY="your-key-here"
@@ -456,16 +509,20 @@ pip install -r requirements-dev.txt
 python -m pytest tests/ -v
 ```
 
-31 tests cover the churn-label/RFM logic (`tests/test_data_prep.py`), the
-SHAP factor-ranking logic (`tests/test_explain.py`), the Gemini action
-guardrail (`tests/test_genai_advisor.py`), and the RAG assistant's chunking,
+35 tests cover the churn-label/RFM logic (`tests/test_data_prep.py`,
+including the exact threshold check and the single-order-customer edge
+case that a naive implementation zeroes out), the SHAP factor-ranking logic
+(`tests/test_explain.py`), the Gemini action guardrail
+(`tests/test_genai_advisor.py`), the RAG assistant's chunking,
 cosine-similarity ranking, and grounding guardrail
-(`tests/test_rag_assistant.py`) — valid actions, invalid actions, missing
-keys, low-similarity refusals, and API failures all resolving to a safe,
-non-crashing result. All four suites run against small hand-built synthetic
-data (or the real, small, already-committed `sql/`/`reports/` artifacts —
-never the 45MB raw dataset), so they run in a couple of seconds and never
-call a real LLM — including in CI, which runs them via GitHub Actions
+(`tests/test_rag_assistant.py`), and the SQL-results parsing for the
+Segment Analysis page (`tests/test_segments.py`) — valid actions, invalid
+actions, missing keys, low-similarity refusals, and API failures all
+resolving to a safe, non-crashing result. All suites run against small
+hand-built synthetic data (or the real, small, already-committed
+`sql/`/`reports/` artifacts — never the 45MB raw dataset), so they run in a
+couple of seconds and never call a real LLM — including in CI, which runs
+them via GitHub Actions
 ([`.github/workflows/tests.yml`](.github/workflows/tests.yml)) on every push
 and pull request.
 
@@ -488,9 +545,8 @@ To deploy your own copy:
    ```toml
    GEMINI_API_KEY = "your-key-here"
    ```
-4. Deploy. No code changes needed — `genai_advisor.py` checks `st.secrets`
-   first and falls back to an environment variable, so the same code runs
-   locally and on Streamlit Cloud.
+4. Deploy. No code changes needed — see [Secrets](#secrets) above for why
+   the same code runs locally and on Streamlit Cloud unmodified.
 
 ## Project structure
 
