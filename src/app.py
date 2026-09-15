@@ -498,7 +498,6 @@ def render_customer_explorer(model_bundle, shap_bundle, predictions, test_featur
             with st.container(border=True):
                 st.markdown(f'<div class="action-pill">{result["recommended_action"]}</div>', unsafe_allow_html=True)
                 st.write(_escape_markdown_dollars(result["explanation"]))
-            st.balloons()
 
     st.subheader("Estimated ROI of intervening")
     st.caption(
@@ -741,7 +740,10 @@ def main():
         st.markdown(f"[Source on GitHub]({GITHUB_URL})")
         st.markdown("[Full methodology (README)](%s#readme)" % GITHUB_URL)
 
-    st.title("Intelligent Churn Predictor & Retention Advisor")
+    if page == "Overview":
+        st.title("Intelligent Churn Predictor & Retention Advisor")
+    else:
+        st.markdown(f"### {page}")
     st.caption(NAV_SUBTITLES[page])
 
     if page != "Overview":
