@@ -19,7 +19,7 @@ using Google's Gemini API — built entirely on free tools.
 
 | Customer risk dashboard | Guardrail in action | Ask the analysis (RAG) |
 |---|---|---|
-| ![App dashboard: at-risk customer dropdown, churn probability, and SHAP risk factor table](screenshots/app_dashboard.png) | ![Gemini section flagging a missing API key for manual review instead of failing silently](screenshots/app_gemini_response.png) | ![The RAG assistant tab, with example questions and an input box](screenshots/app_rag_tab.png) |
+| ![App dashboard: at-risk customer dropdown, risk badge and probability bar, and a SHAP risk factor chart](screenshots/app_dashboard.png) | ![Gemini section flagging a missing API key for manual review instead of failing silently](screenshots/app_gemini_response.png) | ![The RAG assistant tab, with example questions and an input box](screenshots/app_rag_tab.png) |
 | Select any at-risk customer to see their churn probability and top SHAP risk factors. | The middle screenshot shows the guardrail path (no API key configured) rather than a live Gemini call — add your own key (setup below) to see a real generated explanation and recommendation. | Ask a free-form question about the project's own analysis; answers are grounded in retrieved context, same honesty note as above applies. |
 
 ## 1. Business problem
