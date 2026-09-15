@@ -1,6 +1,8 @@
-"""Streamlit UI: pick an at-risk customer, see their SHAP risk factors, and
-generate an on-demand plain-English explanation + guarded retention action
-from Gemini.
+"""Streamlit UI: a small multi-page analytics dashboard over the churn
+model -- an Overview landing page, a per-customer risk explorer with SHAP
+factors + a guarded Gemini recommendation + an ROI calculator, a segment
+analysis page built on the SQL layer, a model-performance/threshold page,
+and a RAG Q&A page over the project's own analysis.
 
 Run locally: `streamlit run src/app.py`
 Deploy: push to GitHub, point Streamlit Community Cloud at this file, and
@@ -19,6 +21,13 @@ HTML/JS into the page. unsafe_allow_html is used only for the card/badge
 styling below, and only wraps values we computed ourselves (probabilities,
 feature names) or that come from the fixed ALLOWED_ACTIONS / corpus-source
 lists -- never free-form model output.
+
+Color discipline: red/amber/green are reserved for risk and ROI signal
+only (risk badges, the SHAP increases/decreases-risk split, positive vs.
+negative expected value). Every other chart or accent -- the segment
+breakdowns, the precision/recall curve, nav/brand elements -- uses the
+neutral blue/slate palette defined in the design tokens below, so color
+never has to be "read" to understand a non-risk number.
 """
 
 import html
@@ -33,6 +42,7 @@ from sklearn.metrics import f1_score, precision_recall_curve, precision_score, r
 from config import (
     ALLOWED_ACTIONS,
     FEATURE_COLUMNS,
+    FEATURE_IMPORTANCE_PATH,
     ID_COLUMN,
     METRICS_PATH,
     MODEL_PATH,
@@ -47,73 +57,155 @@ from segments import load_churn_by_country, load_recency_risk_tiers
 
 st.set_page_config(page_title="Churn Predictor & Retention Advisor", layout="wide")
 
+GITHUB_URL = "https://github.com/Daton-Star/churn-predictor-retention-advisor"
+
+NAV_PAGES = ["Overview", "Customer Risk", "Segment Analysis", "Model Insights", "Ask the Analyst"]
+NAV_SUBTITLES = {
+    "Overview": "A one-screen summary of what this tool does and what it found.",
+    "Customer Risk": "Select an at-risk customer to see their SHAP risk factors, a guarded "
+    "Gemini recommendation, and the expected ROI of acting on it.",
+    "Segment Analysis": "Country and recency-tier breakdowns computed by the SQL layer.",
+    "Model Insights": "Precision/recall tradeoff across every decision threshold.",
+    "Ask the Analyst": "Free-form Q&A grounded in this project's own analysis (RAG).",
+}
+
+# Design tokens: an 8px spacing scale and a small type scale, plus a
+# deliberately restrained palette -- deep blue + slate neutrals for
+# everything, with red/amber/green held back for risk and ROI signal only
+# (see module docstring). Primary blue also matches .streamlit/config.toml.
 CUSTOM_CSS = """
 <style>
-.block-container { padding-top: 2.2rem; max-width: 1180px; }
-h1 { letter-spacing: -0.02em; }
+:root {
+    --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
+    --space-5: 24px; --space-6: 32px; --space-7: 48px; --space-8: 64px;
 
-.stat-row { display: flex; gap: 0.9rem; flex-wrap: wrap; margin: 1rem 0 1.6rem 0; }
+    --text-xs: 0.75rem; --text-sm: 0.8125rem; --text-base: 0.875rem;
+    --text-md: 1rem; --text-lg: 1.125rem; --text-xl: 1.375rem;
+    --text-2xl: 1.75rem; --text-3xl: 2.25rem;
+
+    --color-primary: #1D4ED8;
+    --color-primary-dark: #1E3A8A;
+    --color-primary-soft: #EFF6FF;
+    --color-bg: #FFFFFF;
+    --color-surface: #F8FAFC;
+    --color-border: #E2E8F0;
+    --color-border-hover: #BFDBFE;
+    --color-text: #0F172A;
+    --color-text-muted: #64748B;
+    --color-text-faint: #94A3B8;
+
+    --color-risk-critical-bg: #FEE2E2; --color-risk-critical-fg: #B91C1C;
+    --color-risk-high-bg: #FFEDD5;     --color-risk-high-fg: #C2410C;
+    --color-risk-elevated-bg: #FEF9C3; --color-risk-elevated-fg: #A16207;
+    --color-positive-bg: #DCFCE7; --color-positive-fg: #166534;
+    --color-negative-fg: #B91C1C;
+}
+
+.block-container { padding-top: var(--space-6); max-width: 1180px; }
+h1 { letter-spacing: -0.02em; font-size: var(--text-3xl) !important; }
+h3 { font-size: var(--text-xl) !important; }
+
+/* -- Sidebar / product shell -------------------------------------------- */
+section[data-testid="stSidebar"] { background: var(--color-surface); border-right: 1px solid var(--color-border); }
+.brand-mark { padding: var(--space-2) 0 var(--space-4) 0; }
+.brand-eyebrow {
+    font-size: var(--text-xs); font-weight: 700; color: var(--color-primary);
+    text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: var(--space-1);
+}
+.brand-name { font-size: var(--text-lg); font-weight: 700; color: var(--color-text); line-height: 1.25; }
+
+/* -- KPI / stat cards ----------------------------------------------------- */
+.stat-row { display: flex; gap: var(--space-3); flex-wrap: wrap; margin: var(--space-4) 0 var(--space-6) 0; }
 .stat-card {
     flex: 1; min-width: 160px;
-    background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 12px;
-    padding: 0.85rem 1.1rem;
+    background: var(--color-bg); border: 1px solid var(--color-border); border-top: 3px solid var(--color-primary);
+    border-radius: 10px; padding: var(--space-4);
     transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
 }
-.stat-card:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08); border-color: #C7D2FE; }
-.stat-label { font-size: 0.72rem; font-weight: 600; color: #64748B; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.3rem; }
-.stat-value { font-size: 1.4rem; font-weight: 700; color: #0F172A; }
+.stat-card:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08); border-color: var(--color-border-hover); }
+.stat-label { font-size: var(--text-xs); font-weight: 600; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: var(--space-1); }
+.stat-value { font-size: var(--text-xl); font-weight: 700; color: var(--color-text); }
 
-.risk-badge { display: inline-block; padding: 0.28rem 0.8rem; border-radius: 999px; font-weight: 600; font-size: 0.8rem; }
-.risk-critical { background: #FEE2E2; color: #B91C1C; }
-.risk-high     { background: #FFEDD5; color: #C2410C; }
-.risk-elevated { background: #FEF9C3; color: #A16207; }
+/* -- Risk badges (the only place red/amber appear outside ROI) ----------- */
+.risk-badge { display: inline-block; padding: var(--space-1) var(--space-3); border-radius: 999px; font-weight: 600; font-size: var(--text-sm); }
+.risk-critical { background: var(--color-risk-critical-bg); color: var(--color-risk-critical-fg); }
+.risk-high     { background: var(--color-risk-high-bg);     color: var(--color-risk-high-fg); }
+.risk-elevated { background: var(--color-risk-elevated-bg); color: var(--color-risk-elevated-fg); }
 
-.prob-value { font-size: 2.1rem; font-weight: 700; color: #0F172A; line-height: 1.1; }
-.prob-track { background: #E2E8F0; border-radius: 999px; height: 9px; width: 100%; overflow: hidden; margin-top: 0.5rem; }
-.prob-fill { height: 100%; border-radius: 999px; transition: width 0.7s cubic-bezier(0.22, 1, 0.36, 1); }
-
-.gauge-row { display: flex; align-items: center; gap: 1.1rem; }
+/* -- Risk gauge (pure CSS, no chart lib -- see render_customer_explorer) - */
+.gauge-row { display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap; }
 .gauge {
     width: 128px; height: 128px; border-radius: 50%; flex-shrink: 0;
     display: flex; align-items: center; justify-content: center;
     transition: background 0.7s cubic-bezier(0.22, 1, 0.36, 1);
 }
 .gauge-inner {
-    width: 98px; height: 98px; border-radius: 50%; background: #FFFFFF;
+    width: 98px; height: 98px; border-radius: 50%; background: var(--color-bg);
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    box-shadow: inset 0 0 0 1px #F1F5F9;
+    box-shadow: inset 0 0 0 1px var(--color-surface);
 }
-.gauge-value { font-size: 1.55rem; font-weight: 700; color: #0F172A; line-height: 1.05; }
-.gauge-sub { font-size: 0.62rem; color: #94A3B8; text-transform: uppercase; letter-spacing: 0.04em; margin-top: 0.15rem; }
+.gauge-value { font-size: var(--text-xl); font-weight: 700; color: var(--color-text); line-height: 1.05; }
+.gauge-sub { font-size: var(--text-xs); color: var(--color-text-faint); text-transform: uppercase; letter-spacing: 0.04em; margin-top: var(--space-1); }
 
-.mini-stat-row { display: flex; gap: 0.7rem; flex-direction: column; }
+.mini-stat-row { display: flex; gap: var(--space-2); flex-direction: column; }
 .mini-stat {
-    background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 10px; padding: 0.55rem 0.9rem;
+    background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 8px; padding: var(--space-2) var(--space-4);
     display: flex; align-items: baseline; justify-content: space-between;
     transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
 }
-.mini-stat:hover { transform: translateX(2px); box-shadow: 0 4px 10px rgba(15, 23, 42, 0.06); border-color: #C7D2FE; }
-.mini-label { font-size: 0.72rem; color: #64748B; text-transform: uppercase; letter-spacing: 0.04em; }
-.mini-value { font-size: 1.05rem; font-weight: 700; color: #0F172A; }
+.mini-stat:hover { transform: translateX(2px); box-shadow: 0 4px 10px rgba(15, 23, 42, 0.06); border-color: var(--color-border-hover); }
+.mini-label { font-size: var(--text-sm); color: var(--color-text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.mini-value { font-size: var(--text-md); font-weight: 700; color: var(--color-text); }
 
+/* -- Recommendation / RAG answer accents ---------------------------------- */
 .action-pill {
-    display: inline-block; font-weight: 700; font-size: 0.9rem; color: #166534;
-    background: #DCFCE7; border-radius: 8px; padding: 0.3rem 0.75rem; margin-bottom: 0.6rem;
+    display: inline-block; font-weight: 700; font-size: var(--text-base); color: var(--color-positive-fg);
+    background: var(--color-positive-bg); border-radius: 8px; padding: var(--space-1) var(--space-3); margin-bottom: var(--space-2);
 }
 .source-chip {
-    display: inline-block; background: #EEF2FF; color: #4338CA; border-radius: 6px;
-    padding: 0.18rem 0.6rem; font-size: 0.74rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    margin: 0.2rem 0.35rem 0.2rem 0;
+    display: inline-block; background: var(--color-primary-soft); color: var(--color-primary); border-radius: 6px;
+    padding: 2px var(--space-2); font-size: var(--text-xs); font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    margin: var(--space-1) var(--space-2) var(--space-1) 0;
 }
+.ev-positive { color: var(--color-positive-fg); }
+.ev-negative { color: var(--color-negative-fg); }
 
-.ev-positive { color: #166534; }
-.ev-negative { color: #B91C1C; }
-
-/* nudge the "try a question" chip buttons in the RAG tab to look like pills, not full buttons */
-div[data-testid="stButton"] button {
-    transition: transform 0.12s ease;
+/* -- Overview page --------------------------------------------------------- */
+.hero {
+    background: linear-gradient(135deg, var(--color-primary-soft) 0%, #FFFFFF 100%);
+    border: 1px solid var(--color-border); border-radius: 14px;
+    padding: var(--space-6); margin-bottom: var(--space-5);
 }
+.hero-eyebrow { font-size: var(--text-xs); font-weight: 700; color: var(--color-primary); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: var(--space-2); }
+.hero-title { font-size: var(--text-2xl); font-weight: 700; color: var(--color-text); line-height: 1.2; margin-bottom: var(--space-2); }
+.hero-body { font-size: var(--text-md); color: var(--color-text-muted); max-width: 640px; line-height: 1.55; }
+
+.nav-card {
+    display: block; background: var(--color-bg); border: 1px solid var(--color-border); border-radius: 10px;
+    padding: var(--space-4); height: 100%;
+    transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+}
+.nav-card:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08); border-color: var(--color-border-hover); }
+.nav-card-title { font-size: var(--text-md); font-weight: 700; color: var(--color-text); margin-bottom: var(--space-1); }
+.nav-card-body { font-size: var(--text-sm); color: var(--color-text-muted); line-height: 1.5; }
+
+/* -- Skeleton loading state (used only for the two real network calls) --- */
+@keyframes skeleton-pulse { 0% { opacity: 0.55; } 50% { opacity: 1; } 100% { opacity: 0.55; } }
+.skeleton-card { border: 1px solid var(--color-border); border-radius: 10px; padding: var(--space-4); background: var(--color-bg); }
+.skeleton-line { height: 12px; border-radius: 6px; background: var(--color-border); margin-bottom: var(--space-3); animation: skeleton-pulse 1.3s ease-in-out infinite; }
+.skeleton-line:last-child { margin-bottom: 0; }
+.skeleton-w-40 { width: 40%; } .skeleton-w-60 { width: 60%; } .skeleton-w-90 { width: 90%; } .skeleton-w-full { width: 100%; }
+
+div[data-testid="stButton"] button { transition: transform 0.12s ease; }
 div[data-testid="stButton"] button:hover { transform: translateY(-1px); }
+
+/* -- Responsive: stack the gauge and tighten padding on small screens ---- */
+@media (max-width: 640px) {
+    .block-container { padding-top: var(--space-4); padding-left: var(--space-3); padding-right: var(--space-3); }
+    .gauge-row { flex-direction: column; align-items: flex-start; }
+    .hero { padding: var(--space-4); }
+    .hero-title { font-size: var(--text-xl); }
+}
 </style>
 """
 
@@ -152,6 +244,15 @@ def _risk_tier(prob):
     return "Elevated risk", "risk-elevated", "#CA8A04"
 
 
+def _skeleton(lines=("skeleton-w-40", "skeleton-w-90", "skeleton-w-60")):
+    """A small shimmering placeholder shown only while a real network call
+    (Gemini) is in flight -- not used anywhere content loads instantly from
+    local disk, since a skeleton over instant content is theater, not
+    polish."""
+    rows = "".join(f'<div class="skeleton-line {cls}"></div>' for cls in lines)
+    return f'<div class="skeleton-card">{rows}</div>'
+
+
 @st.cache_resource
 def load_artifacts():
     model_bundle = joblib.load(MODEL_PATH)
@@ -164,6 +265,12 @@ def load_artifacts():
 @st.cache_resource
 def load_metrics():
     with open(METRICS_PATH) as f:
+        return json.load(f)
+
+
+@st.cache_resource
+def load_feature_importance():
+    with open(FEATURE_IMPORTANCE_PATH) as f:
         return json.load(f)
 
 
@@ -188,6 +295,82 @@ def render_kpi_row(model_bundle, metrics, at_risk_count, total_count):
                 <div class="stat-value">{metrics['test_metrics']['test_f1']:.3f}</div></div>
             <div class="stat-card"><div class="stat-label">At risk (test set)</div>
                 <div class="stat-value">{at_risk_count:,} / {total_count:,}</div></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _go_to(page):
+    # Streamlit reruns the script automatically after an on_click callback
+    # returns and picks up this session_state change on that rerun -- no
+    # explicit st.rerun() here (calling it inside a callback is unsupported).
+    st.session_state["nav_page"] = page
+
+
+def render_overview(metrics, at_risk_count, total_count, feature_importance):
+    top_driver = max(feature_importance, key=feature_importance.get).replace("_", " ")
+    churn_rate = metrics["churn_rate"]
+
+    st.markdown(
+        f"""
+        <div class="hero">
+            <div class="hero-eyebrow">Retention intelligence</div>
+            <div class="hero-title">Know who's about to churn, why, and what it's worth to act.</div>
+            <div class="hero-body">
+                Trained on {metrics['train_rows'] + metrics['test_rows']:,} real customers from the
+                UCI Online Retail II dataset (~1M transaction line items), this tool scores every
+                customer's churn risk, explains the top statistical drivers with SHAP, and turns
+                that into a guardrailed Gemini recommendation with an expected-value ROI estimate --
+                not just a probability.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("##### At a glance")
+    render_kpi_row_extended(metrics, at_risk_count, total_count, churn_rate, top_driver)
+
+    st.markdown("##### Explore")
+    cards = [
+        ("Customer Risk", "Pick an at-risk customer, see their SHAP factors, generate a Gemini recommendation, and estimate its ROI."),
+        ("Segment Analysis", "Churn rate by country and revenue by recency-risk tier, computed via SQL."),
+        ("Model Insights", "Precision/recall tradeoff across every decision threshold, with a live confusion matrix."),
+        ("Ask the Analyst", "Ask a free-form question about this project's own analysis, grounded via retrieval (RAG)."),
+    ]
+    cols = st.columns(4)
+    for col, (name, desc) in zip(cols, cards):
+        with col:
+            st.markdown(
+                f"""
+                <div class="nav-card">
+                    <div class="nav-card-title">{name}</div>
+                    <div class="nav-card-body">{desc}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.button(f"Open {name} →", key=f"go_{name}", use_container_width=True, on_click=_go_to, args=(name,))
+
+    st.caption(
+        "This dashboard scores a fixed, pre-trained test set rather than accepting live CSV "
+        "uploads -- see the README for how to retrain the pipeline on new data from the CLI."
+    )
+
+
+def render_kpi_row_extended(metrics, at_risk_count, total_count, churn_rate, top_driver):
+    st.markdown(
+        f"""
+        <div class="stat-row">
+            <div class="stat-card"><div class="stat-label">Total customers scored</div>
+                <div class="stat-value">{total_count:,}</div></div>
+            <div class="stat-card"><div class="stat-label">Churn rate</div>
+                <div class="stat-value">{churn_rate:.1%}</div></div>
+            <div class="stat-card"><div class="stat-label">Test AUC-ROC</div>
+                <div class="stat-value">{metrics['test_metrics']['test_roc_auc']:.3f}</div></div>
+            <div class="stat-card"><div class="stat-label">Top churn driver</div>
+                <div class="stat-value" style="font-size: var(--text-base); text-transform: capitalize;">{html.escape(top_driver)}</div></div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -233,7 +416,7 @@ def render_customer_explorer(model_bundle, shap_bundle, predictions, test_featur
                 </div>
                 <div>
                     <div class="risk-badge {tier_class}">{tier_label}</div>
-                    <div style="margin-top: 0.5rem; font-size: 0.82rem; color: #64748B;">Predicted probability this customer stops purchasing.</div>
+                    <div style="margin-top: 0.5rem; font-size: var(--text-sm); color: var(--color-text-muted);">Predicted probability this customer stops purchasing.</div>
                 </div>
             </div>
             """,
@@ -292,12 +475,14 @@ def render_customer_explorer(model_bundle, shap_bundle, predictions, test_featur
 
     st.subheader("Gemini retention recommendation")
     if st.button("Generate explanation", type="primary"):
-        with st.spinner("Calling Gemini..."):
-            result = generate_customer_explanation(
-                customer_id=customer_id,
-                churn_probability=prob,
-                top_factors=top_factors.to_dict("records"),
-            )
+        skeleton_slot = st.empty()
+        skeleton_slot.markdown(_skeleton(), unsafe_allow_html=True)
+        result = generate_customer_explanation(
+            customer_id=customer_id,
+            churn_probability=prob,
+            top_factors=top_factors.to_dict("records"),
+        )
+        skeleton_slot.empty()
 
         if result["needs_manual_review"]:
             with st.container(border=True):
@@ -347,7 +532,7 @@ def render_customer_explorer(model_bundle, shap_bundle, predictions, test_featur
         sign = "+" if expected_value >= 0 else "−"
         st.markdown(
             f'<div class="mini-label">Expected value of intervening</div>'
-            f'<div class="prob-value {ev_class}">{sign}${abs(expected_value):,.2f}</div>',
+            f'<div class="stat-value {ev_class}" style="font-size: var(--text-2xl);">{sign}${abs(expected_value):,.2f}</div>',
             unsafe_allow_html=True,
         )
 
@@ -355,7 +540,9 @@ def render_customer_explorer(model_bundle, shap_bundle, predictions, test_featur
 def render_segment_analysis():
     st.caption(
         "Computed via SQL against the same cleaned dataset the model trains on -- see "
-        "`sql/` for the queries and `sql/QUERY_RESULTS.md` for the full committed output."
+        "`sql/` for the queries and `sql/QUERY_RESULTS.md` for the full committed output. "
+        "Bars use the neutral brand blue throughout: color here encodes nothing but magnitude, "
+        "so it's never confused with the risk-severity colors used elsewhere in this app."
     )
 
     st.subheader("Churn rate by country")
@@ -363,7 +550,7 @@ def render_segment_analysis():
     country_df = load_churn_by_country()
     country_chart = (
         alt.Chart(country_df)
-        .mark_bar(cornerRadiusEnd=4, color="#4338CA")
+        .mark_bar(cornerRadiusEnd=4, color="#1D4ED8")
         .encode(
             x=alt.X("churn_rate_pct:Q", title="Churn rate (%)"),
             y=alt.Y("country:N", sort="-x", title=None),
@@ -382,7 +569,7 @@ def render_segment_analysis():
     tier_df = load_recency_risk_tiers()
     tier_chart = (
         alt.Chart(tier_df)
-        .mark_bar(cornerRadiusEnd=4, color="#16A34A")
+        .mark_bar(cornerRadiusEnd=4, color="#1D4ED8")
         .encode(
             x=alt.X("total_revenue:Q", title="Total revenue ($)"),
             y=alt.Y("risk_tier:N", sort=None, title=None),
@@ -424,7 +611,10 @@ def render_model_performance(predictions):
             color=alt.Color(
                 "metric:N",
                 title=None,
-                scale=alt.Scale(domain=["Precision", "Recall"], range=["#4338CA", "#EA580C"]),
+                # Blue + slate, not orange: this is a generic two-series
+                # comparison, not a risk signal, so it stays inside the
+                # neutral palette rather than borrowing an amber/red tone.
+                scale=alt.Scale(domain=["Precision", "Recall"], range=["#1D4ED8", "#475569"]),
                 legend=alt.Legend(orient="top", title=None),
             ),
         )
@@ -488,12 +678,14 @@ def render_ask_the_analysis():
     question = st.text_input("Your question", key="rag_question", placeholder=EXAMPLE_QUESTIONS[0])
 
     if st.button("Ask", type="primary") and question.strip():
-        with st.spinner("Retrieving context and calling Gemini..."):
-            try:
-                index = load_rag_index()
-                result = answer_question(question, index=index)
-            except Exception as exc:  # noqa: BLE001 - index build can fail without a valid key
-                result = {"answer": None, "sources": [], "error": f"Could not build/load the RAG index: {exc}"}
+        skeleton_slot = st.empty()
+        skeleton_slot.markdown(_skeleton(), unsafe_allow_html=True)
+        try:
+            index = load_rag_index()
+            result = answer_question(question, index=index)
+        except Exception as exc:  # noqa: BLE001 - index build can fail without a valid key
+            result = {"answer": None, "sources": [], "error": f"Could not build/load the RAG index: {exc}"}
+        skeleton_slot.empty()
 
         if result["error"]:
             st.warning(result["error"])
@@ -512,16 +704,10 @@ def render_ask_the_analysis():
 def main():
     st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
-    st.title("Intelligent Churn Predictor & Retention Advisor")
-    st.caption(
-        "Trained on the UCI Online Retail II dataset. Select an at-risk customer to see "
-        "the statistical factors driving their churn score, then generate a plain-English "
-        "explanation and a guarded retention recommendation with Gemini."
-    )
-
     try:
         model_bundle, shap_bundle, predictions, test_features = load_artifacts()
         metrics = load_metrics()
+        feature_importance = load_feature_importance()
     except FileNotFoundError:
         st.error(
             "Model artifacts not found. Run the pipeline first:\n\n"
@@ -530,27 +716,46 @@ def main():
         st.stop()
 
     at_risk = predictions[predictions["y_pred"] == 1]
-    render_kpi_row(model_bundle, metrics, len(at_risk), len(predictions))
+    at_risk_count, total_count = len(at_risk), len(predictions)
 
-    st.sidebar.header("About this project")
-    st.sidebar.write(
-        "An end-to-end churn prediction system: RFM-based churn labels, a "
-        "leakage-checked model comparison, SHAP explainability, and a "
-        "guardrailed Gemini retention advisor. See the README for the full "
-        "methodology and business case."
-    )
-    st.sidebar.markdown("[Source on GitHub](https://github.com/Daton-Star/churn-predictor-retention-advisor)")
+    if "nav_page" not in st.session_state:
+        st.session_state["nav_page"] = "Overview"
 
-    tab1, tab2, tab3, tab4 = st.tabs(
-        ["Customer risk explorer", "Segment analysis", "Model performance", "Ask the analysis"]
-    )
-    with tab1:
+    with st.sidebar:
+        st.markdown(
+            """
+            <div class="brand-mark">
+                <div class="brand-eyebrow">Churn Intelligence</div>
+                <div class="brand-name">Retention Advisor</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        page = st.radio("Navigate", NAV_PAGES, key="nav_page", label_visibility="collapsed")
+        st.divider()
+        st.caption(
+            "An end-to-end churn prediction system: RFM-based churn labels, a "
+            "leakage-checked model comparison, SHAP explainability, and a "
+            "guardrailed Gemini retention advisor."
+        )
+        st.markdown(f"[Source on GitHub]({GITHUB_URL})")
+        st.markdown("[Full methodology (README)](%s#readme)" % GITHUB_URL)
+
+    st.title("Intelligent Churn Predictor & Retention Advisor")
+    st.caption(NAV_SUBTITLES[page])
+
+    if page != "Overview":
+        render_kpi_row(model_bundle, metrics, at_risk_count, total_count)
+
+    if page == "Overview":
+        render_overview(metrics, at_risk_count, total_count, feature_importance)
+    elif page == "Customer Risk":
         render_customer_explorer(model_bundle, shap_bundle, predictions, test_features)
-    with tab2:
+    elif page == "Segment Analysis":
         render_segment_analysis()
-    with tab3:
+    elif page == "Model Insights":
         render_model_performance(predictions)
-    with tab4:
+    elif page == "Ask the Analyst":
         render_ask_the_analysis()
 
 

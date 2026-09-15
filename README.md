@@ -12,21 +12,28 @@ using Google's Gemini API — built entirely on free tools.
 
 ## Demo
 
-![Walkthrough: switching between at-risk customers, viewing SHAP risk factors, generating a Gemini retention recommendation, and asking a free-form question in the RAG-powered "Ask the analysis" tab](screenshots/app_demo.gif)
+![Walkthrough: switching between at-risk customers, viewing SHAP risk factors, generating a Gemini retention recommendation, and asking a free-form question in the RAG-powered "Ask the Analyst" page](screenshots/app_demo.gif)
 
 *Recorded against a local run with no Gemini API key set, so it shows the guardrail path (the app flags for manual review instead of failing silently or inventing an answer) — see [Screenshots](#screenshots) below and the setup steps for what a live Gemini response looks like.*
 
 ## Screenshots
 
-| Customer risk dashboard | Guardrail in action | Ask the analysis (RAG) |
-|---|---|---|
-| ![App dashboard: at-risk customer dropdown, risk badge and probability bar, and a SHAP risk factor chart](screenshots/app_dashboard.png) | ![Gemini section flagging a missing API key for manual review instead of failing silently](screenshots/app_gemini_response.png) | ![The RAG assistant tab, with example questions and an input box](screenshots/app_rag_tab.png) |
-| Select any at-risk customer to see their churn probability and top SHAP risk factors. | The middle screenshot shows the guardrail path (no API key configured) rather than a live Gemini call — add your own key (setup below) to see a real generated explanation and recommendation. | Ask a free-form question about the project's own analysis; answers are grounded in retrieved context, same honesty note as above applies. |
+The app is a small sidebar-navigated dashboard, not a single script with tabs: a brand mark + page list on the left, a persistent KPI strip, and five pages.
 
-| ROI calculator | Segment analysis | Model performance |
+| Overview | Customer Risk |
+|---|---|
+| ![Overview page: hero section explaining what the tool does, an "At a glance" KPI row, and four nav cards linking to the other pages](screenshots/app_overview.png) | ![Customer Risk page: at-risk customer dropdown, a circular risk gauge, a SHAP risk factor chart, and mini stat cards](screenshots/app_dashboard.png) |
+| The landing page: what this tool does, headline numbers, and one-click links into each other page. | Select any at-risk customer to see their churn probability as a gauge and their top SHAP risk factors. |
+
+| Guardrail + ROI calculator | Ask the Analyst (RAG) |
+|---|---|
+| ![Gemini section flagging a missing API key for manual review, plus the Estimated ROI of intervening calculator below it with a negative expected value](screenshots/app_gemini_response.png) | ![The Ask the Analyst page, with clickable example-question chips and an input box](screenshots/app_rag_tab.png) |
+| Shows the guardrail path (no API key configured) rather than a live Gemini call — add your own key (setup below) to see a real generated explanation and recommendation. | Ask a free-form question about the project's own analysis, or click one of the example chips; answers are grounded in retrieved context, same honesty note as above applies. |
+
+| ROI calculator (detail) | Segment Analysis | Model Insights |
 |---|---|---|
-| ![Estimated ROI of intervening: a retention-action dropdown, editable cost, an effectiveness slider, and the resulting expected value in dollars](screenshots/app_roi_calculator.png) | ![Segment analysis tab: churn rate by country and revenue by recency-risk tier, both bar charts computed from the SQL layer](screenshots/app_segments.png) | ![Model performance tab: precision and recall curves against decision threshold, a threshold slider, and the resulting confusion matrix](screenshots/app_model_performance.png) |
-| Turns a SHAP-explained risk score into a dollar decision: expected value = effectiveness × churn probability × lifetime value − cost, with every assumption an editable input. | The SQL layer's country and recency-tier breakdowns ([`sql/`](sql/)), rendered live in the app instead of sitting in a separate folder. | The model's 0.5 default threshold is a business choice, not a statistical fact — this tab makes the precision/recall tradeoff explorable instead of implicit. |
+| ![Estimated ROI of intervening: a retention-action dropdown, editable cost, an effectiveness slider, and the resulting expected value in dollars](screenshots/app_roi_calculator.png) | ![Segment Analysis page: churn rate by country and revenue by recency-risk tier, both bar charts computed from the SQL layer, in the app's neutral brand blue](screenshots/app_segments.png) | ![Model Insights page: precision and recall curves against decision threshold in blue/slate, a threshold slider, and the resulting confusion matrix](screenshots/app_model_performance.png) |
+| Turns a SHAP-explained risk score into a dollar decision: expected value = effectiveness × churn probability × lifetime value − cost, with every assumption an editable input. | The SQL layer's country and recency-tier breakdowns ([`sql/`](sql/)), rendered live in the app instead of sitting in a separate folder. Color here is neutral brand blue throughout — magnitude only, never confused with risk severity. | The model's 0.5 default threshold is a business choice, not a statistical fact — this page makes the precision/recall tradeoff explorable instead of implicit. |
 
 ## 1. Business problem
 
@@ -139,7 +146,7 @@ both independently agree on 5,878 customers at a 50.8% churn rate. Real
 output from running all four queries is committed at
 [`sql/QUERY_RESULTS.md`](sql/QUERY_RESULTS.md) — no database client needed
 to see the results. The country and recency-tier breakdowns are also
-rendered live in the app's **Segment analysis** tab
+rendered live in the app's **Segment Analysis** page
 ([`src/segments.py`](src/segments.py) parses the committed markdown table
 straight into the chart — no second query needed), so the SQL work shows up
 as part of the product, not a folder next to it.
@@ -156,10 +163,27 @@ care about on average."
 The app defaults to flagging a customer "at risk" above a 0.5 churn
 probability — but that cutoff is a business decision (how many false alarms
 is a limited retention budget worth?), not a statistical fact. The
-**Model performance** tab plots precision and recall against every possible
+**Model Insights** page plots precision and recall against every possible
 threshold (`sklearn.metrics.precision_recall_curve` on the held-out test
 set) and lets you pick one interactively, recomputing the confusion matrix
 and precision/recall/F1 on the fly.
+
+### Design system
+
+The UI is a real design system, not per-element styling: `src/app.py` defines
+an 8px spacing scale and a small type scale as CSS custom properties
+(`--space-1`…`--space-8`, `--text-xs`…`--text-3xl`), plus a restrained
+palette — deep blue (`#1D4ED8`) and slate neutrals for everything, with
+red/amber/green held back strictly for risk severity and ROI sign (positive
+vs. negative expected value). Every chart that *isn't* encoding risk — the
+segment breakdowns, the precision/recall curve — uses the neutral blue
+rather than borrowing a "risk" color for an unrelated series, so color never
+has to be mentally filtered to find the signal that matters. Navigation is a
+sidebar page list (Overview / Customer Risk / Segment Analysis / Model
+Insights / Ask the Analyst) with a brand mark at the top, closer to a
+Stripe/Linear-style product shell than a single script with tabs — including
+a landing **Overview** page whose four cards deep-link into the other pages
+via `st.session_state`.
 
 ### GenAI layer
 
@@ -203,7 +227,7 @@ different files.
   same philosophy as the action guardrail above: an ungrounded but
   fluent-sounding answer is worse than no answer.
 
-Try it in the app's **"Ask the analysis"** tab, or from the CLI:
+Try it in the app's **"Ask the Analyst"** page, or from the CLI:
 `python src/rag_assistant.py` (builds the index, then runs one example
 question end-to-end).
 
@@ -268,7 +292,7 @@ Ranked by mean absolute SHAP value across the test set:
 
 A statistical score ("84.8% recall") doesn't tell a business user whether
 acting on it is worth the money. The app's **Estimated ROI of intervening**
-section (bottom of the Customer risk explorer tab) turns each customer's
+section (bottom of the Customer Risk page) turns each customer's
 churn probability into a dollar decision with a simplified expected-value
 model:
 
@@ -417,7 +441,7 @@ python sql/run_queries.py  # -> sql/QUERY_RESULTS.md
 ### Build the RAG index (optional)
 
 Not required before running the app — it builds the index itself on first
-use of the "Ask the analysis" tab (and caches it for the rest of that
+use of the "Ask the Analyst" page (and caches it for the rest of that
 process). Running it up front just avoids that first-question delay and
 lets you try it from the CLI:
 
@@ -492,8 +516,9 @@ To deploy your own copy:
 │   ├── explain.py          # Stage 3: SHAP per-customer explanations
 │   ├── genai_advisor.py    # Stage 4: Gemini explanation + guardrailed action
 │   ├── rag_assistant.py    # RAG Q&A over the project's own analysis
-│   ├── segments.py         # parses sql/QUERY_RESULTS.md for the Segment analysis tab
-│   └── app.py               # Streamlit UI (4 tabs: risk explorer, segments, model perf, RAG)
+│   ├── segments.py         # parses sql/QUERY_RESULTS.md for the Segment Analysis page
+│   └── app.py               # Streamlit dashboard: sidebar nav, 5 pages (Overview, Customer
+│                             #   Risk, Segment Analysis, Model Insights, Ask the Analyst)
 ├── .streamlit/
 │   ├── config.toml          # app theme (colors, font)
 │   └── secrets.toml.example
