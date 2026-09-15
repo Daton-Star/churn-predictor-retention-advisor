@@ -1,6 +1,7 @@
 # Intelligent Churn Predictor & Retention Advisor
 
 [![tests](https://github.com/Daton-Star/churn-predictor-retention-advisor/actions/workflows/tests.yml/badge.svg)](https://github.com/Daton-Star/churn-predictor-retention-advisor/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **🔴 [Live demo](https://churn-predictor-retention-advisor-w2rdhndvxpuzwkpqnc7rkw.streamlit.app/)** — deployed free on Streamlit Community Cloud.
 
@@ -461,9 +462,18 @@ To deploy your own copy:
 │   ├── rag_assistant.py    # RAG Q&A over the project's own analysis
 │   └── app.py               # Streamlit UI (customer explorer + RAG tab)
 ├── .streamlit/
+│   ├── config.toml          # app theme (colors, font)
 │   └── secrets.toml.example
 ├── requirements.txt
 ├── requirements-dev.txt
 ├── runtime.txt              # pins Python 3.11 for Streamlit Community Cloud
+├── LICENSE                  # MIT
 └── README.md
 ```
+
+## License
+
+MIT — see [LICENSE](LICENSE). The dataset ([UCI Online Retail
+II](https://archive.ics.uci.edu/dataset/502/online+retail+ii)) is not
+redistributed in this repo and is used here for research/educational
+purposes only.
