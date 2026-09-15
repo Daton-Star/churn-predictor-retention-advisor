@@ -57,23 +57,44 @@ h1 { letter-spacing: -0.02em; }
     flex: 1; min-width: 160px;
     background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 12px;
     padding: 0.85rem 1.1rem;
+    transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
 }
+.stat-card:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08); border-color: #C7D2FE; }
 .stat-label { font-size: 0.72rem; font-weight: 600; color: #64748B; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.3rem; }
 .stat-value { font-size: 1.4rem; font-weight: 700; color: #0F172A; }
 
-.risk-badge { display: inline-block; padding: 0.28rem 0.8rem; border-radius: 999px; font-weight: 600; font-size: 0.8rem; margin-bottom: 0.55rem; }
+.risk-badge { display: inline-block; padding: 0.28rem 0.8rem; border-radius: 999px; font-weight: 600; font-size: 0.8rem; }
 .risk-critical { background: #FEE2E2; color: #B91C1C; }
 .risk-high     { background: #FFEDD5; color: #C2410C; }
 .risk-elevated { background: #FEF9C3; color: #A16207; }
 
 .prob-value { font-size: 2.1rem; font-weight: 700; color: #0F172A; line-height: 1.1; }
 .prob-track { background: #E2E8F0; border-radius: 999px; height: 9px; width: 100%; overflow: hidden; margin-top: 0.5rem; }
-.prob-fill { height: 100%; border-radius: 999px; }
+.prob-fill { height: 100%; border-radius: 999px; transition: width 0.7s cubic-bezier(0.22, 1, 0.36, 1); }
 
-.mini-stat-row { display: flex; gap: 0.7rem; }
-.mini-stat { flex: 1; background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 10px; padding: 0.65rem 0.9rem; }
-.mini-label { font-size: 0.7rem; color: #64748B; text-transform: uppercase; letter-spacing: 0.04em; }
-.mini-value { font-size: 1.15rem; font-weight: 700; color: #0F172A; margin-top: 0.15rem; }
+.gauge-row { display: flex; align-items: center; gap: 1.1rem; }
+.gauge {
+    width: 128px; height: 128px; border-radius: 50%; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.gauge-inner {
+    width: 98px; height: 98px; border-radius: 50%; background: #FFFFFF;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    box-shadow: inset 0 0 0 1px #F1F5F9;
+}
+.gauge-value { font-size: 1.55rem; font-weight: 700; color: #0F172A; line-height: 1.05; }
+.gauge-sub { font-size: 0.62rem; color: #94A3B8; text-transform: uppercase; letter-spacing: 0.04em; margin-top: 0.15rem; }
+
+.mini-stat-row { display: flex; gap: 0.7rem; flex-direction: column; }
+.mini-stat {
+    background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 10px; padding: 0.55rem 0.9rem;
+    display: flex; align-items: baseline; justify-content: space-between;
+    transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+}
+.mini-stat:hover { transform: translateX(2px); box-shadow: 0 4px 10px rgba(15, 23, 42, 0.06); border-color: #C7D2FE; }
+.mini-label { font-size: 0.72rem; color: #64748B; text-transform: uppercase; letter-spacing: 0.04em; }
+.mini-value { font-size: 1.05rem; font-weight: 700; color: #0F172A; }
 
 .action-pill {
     display: inline-block; font-weight: 700; font-size: 0.9rem; color: #166534;
@@ -87,6 +108,12 @@ h1 { letter-spacing: -0.02em; }
 
 .ev-positive { color: #166534; }
 .ev-negative { color: #B91C1C; }
+
+/* nudge the "try a question" chip buttons in the RAG tab to look like pills, not full buttons */
+div[data-testid="stButton"] button {
+    transition: transform 0.12s ease;
+}
+div[data-testid="stButton"] button:hover { transform: translateY(-1px); }
 </style>
 """
 
@@ -192,15 +219,26 @@ def render_customer_explorer(model_bundle, shap_bundle, predictions, test_featur
 
     col1, col2 = st.columns([1, 1.4])
     with col1:
+        # A pure-CSS conic-gradient ring rather than a chart library -- cheap,
+        # zero extra rendering risk, and animates smoothly via the .gauge
+        # transition when a different customer is selected.
         st.markdown(
             f"""
-            <div class="risk-badge {tier_class}">{tier_label}</div>
-            <div class="prob-value">{prob:.1%}</div>
-            <div class="prob-track"><div class="prob-fill" style="width:{prob * 100:.1f}%; background:{tier_color};"></div></div>
+            <div class="gauge-row">
+                <div class="gauge" style="background: conic-gradient({tier_color} 0deg {prob * 360:.1f}deg, #E2E8F0 {prob * 360:.1f}deg 360deg);">
+                    <div class="gauge-inner">
+                        <div class="gauge-value">{prob:.1%}</div>
+                        <div class="gauge-sub">churn risk</div>
+                    </div>
+                </div>
+                <div>
+                    <div class="risk-badge {tier_class}">{tier_label}</div>
+                    <div style="margin-top: 0.5rem; font-size: 0.82rem; color: #64748B;">Predicted probability this customer stops purchasing.</div>
+                </div>
+            </div>
             """,
             unsafe_allow_html=True,
         )
-        st.caption("Predicted churn probability")
     with col2:
         st.markdown(
             f"""
@@ -275,6 +313,7 @@ def render_customer_explorer(model_bundle, shap_bundle, predictions, test_featur
             with st.container(border=True):
                 st.markdown(f'<div class="action-pill">{result["recommended_action"]}</div>', unsafe_allow_html=True)
                 st.write(_escape_markdown_dollars(result["explanation"]))
+            st.balloons()
 
     st.subheader("Estimated ROI of intervening")
     st.caption(
@@ -437,8 +476,16 @@ def render_ask_the_analysis():
         "for the retrieval + guardrail design."
     )
 
-    question = st.text_input("Your question", placeholder=EXAMPLE_QUESTIONS[0])
-    st.caption("Examples: " + " · ".join(f"*{q}*" for q in EXAMPLE_QUESTIONS[1:]))
+    if "rag_question" not in st.session_state:
+        st.session_state["rag_question"] = ""
+
+    st.caption("Try one:")
+    chip_cols = st.columns(len(EXAMPLE_QUESTIONS))
+    for col, q in zip(chip_cols, EXAMPLE_QUESTIONS):
+        if col.button(q, key=f"chip_{q}", use_container_width=True):
+            st.session_state["rag_question"] = q
+
+    question = st.text_input("Your question", key="rag_question", placeholder=EXAMPLE_QUESTIONS[0])
 
     if st.button("Ask", type="primary") and question.strip():
         with st.spinner("Retrieving context and calling Gemini..."):
