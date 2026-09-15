@@ -23,6 +23,11 @@ using Google's Gemini API — built entirely on free tools.
 | ![App dashboard: at-risk customer dropdown, risk badge and probability bar, and a SHAP risk factor chart](screenshots/app_dashboard.png) | ![Gemini section flagging a missing API key for manual review instead of failing silently](screenshots/app_gemini_response.png) | ![The RAG assistant tab, with example questions and an input box](screenshots/app_rag_tab.png) |
 | Select any at-risk customer to see their churn probability and top SHAP risk factors. | The middle screenshot shows the guardrail path (no API key configured) rather than a live Gemini call — add your own key (setup below) to see a real generated explanation and recommendation. | Ask a free-form question about the project's own analysis; answers are grounded in retrieved context, same honesty note as above applies. |
 
+| ROI calculator | Segment analysis | Model performance |
+|---|---|---|
+| ![Estimated ROI of intervening: a retention-action dropdown, editable cost, an effectiveness slider, and the resulting expected value in dollars](screenshots/app_roi_calculator.png) | ![Segment analysis tab: churn rate by country and revenue by recency-risk tier, both bar charts computed from the SQL layer](screenshots/app_segments.png) | ![Model performance tab: precision and recall curves against decision threshold, a threshold slider, and the resulting confusion matrix](screenshots/app_model_performance.png) |
+| Turns a SHAP-explained risk score into a dollar decision: expected value = effectiveness × churn probability × lifetime value − cost, with every assumption an editable input. | The SQL layer's country and recency-tier breakdowns ([`sql/`](sql/)), rendered live in the app instead of sitting in a separate folder. | The model's 0.5 default threshold is a business choice, not a statistical fact — this tab makes the precision/recall tradeoff explorable instead of implicit. |
+
 ## 1. Business problem
 
 Retention teams at subscription-free, repeat-purchase retailers (gift shops,
@@ -133,7 +138,11 @@ at risk, recency-based risk tiers) and cross-validates the pandas pipeline:
 both independently agree on 5,878 customers at a 50.8% churn rate. Real
 output from running all four queries is committed at
 [`sql/QUERY_RESULTS.md`](sql/QUERY_RESULTS.md) — no database client needed
-to see the results.
+to see the results. The country and recency-tier breakdowns are also
+rendered live in the app's **Segment analysis** tab
+([`src/segments.py`](src/segments.py) parses the committed markdown table
+straight into the chart — no second query needed), so the SQL work shows up
+as part of the product, not a folder next to it.
 
 ### Explainability
 
@@ -141,6 +150,16 @@ to see the results.
 winning tree ensemble — fast, exact, and (unlike a global importance chart)
 answers "why is *this* customer flagged" rather than "what does the model
 care about on average."
+
+### Threshold tuning
+
+The app defaults to flagging a customer "at risk" above a 0.5 churn
+probability — but that cutoff is a business decision (how many false alarms
+is a limited retention budget worth?), not a statistical fact. The
+**Model performance** tab plots precision and recall against every possible
+threshold (`sklearn.metrics.precision_recall_curve` on the held-out test
+set) and lets you pick one interactively, recomputing the confusion matrix
+and precision/recall/F1 on the fly.
 
 ### GenAI layer
 
@@ -245,28 +264,41 @@ Ranked by mean absolute SHAP value across the test set:
    a small number of high-volume wholesale accounts rather than being a
    broad-based dissatisfaction signal.
 
-## 5. Business impact framing *(template — fill in with real numbers)*
+## 5. Business impact framing
 
-> Using the test-set confusion matrix as a starting point: the model
-> correctly flags **506 of 597** actual churners (84.8% recall) at a cost of
-> **115 false alarms** out of 1,176 customers scored.
->
-> To translate this into dollars, fill in:
-> - Average annual value of a retained customer: **$______**
-> - Estimated win-back rate from a retention action (discount / call /
->   loyalty upgrade): **______%**
-> - Cost per retention action: **$______**
->
-> Then: `net impact ≈ (True Positives × win-back rate × customer value) − (True Positives + False Positives) × cost per action`
->
-> Worked example at illustrative values ($200 customer value, 20% win-back
-> rate, $15 per action): scaling the test-set confusion matrix up by
-> ~5x (1,176 test customers → the full 5,878-customer base) gives an
-> estimated **2,530 true-positive flags** and **575 false alarms** across
-> the whole customer base:
-> `(2,530 × 0.20 × $200) − ((2,530 + 575) × $15) ≈ $101,200 − $46,575 ≈ $54,625` net
-> annualized value versus doing nothing — **replace the three inputs above
-> with real figures from your business before quoting this number anywhere.**
+A statistical score ("84.8% recall") doesn't tell a business user whether
+acting on it is worth the money. The app's **Estimated ROI of intervening**
+section (bottom of the Customer risk explorer tab) turns each customer's
+churn probability into a dollar decision with a simplified expected-value
+model:
+
+```
+expected value = effectiveness × churn probability × lifetime value − cost
+```
+
+- **Lifetime value** uses the customer's historical spend (`monetary`) as a
+  proxy for the revenue preserved if they're retained.
+- **Effectiveness** — how often a given action (discount, support call,
+  loyalty upgrade, ...) actually retains an at-risk customer — is not
+  something this project has real campaign data for, so it's an editable
+  slider (default 20%), not a hardcoded number. That's deliberate: a real
+  analyst would plug in their own historical win-back rate here, and the
+  point of the tool is to make that assumption explicit and adjustable
+  rather than buried in a spreadsheet formula.
+- **Cost** defaults to an illustrative per-action placeholder
+  (`DEFAULT_ACTION_COST` in `src/app.py`) and is also editable.
+
+This surfaces real, useful signal even with placeholder inputs: e.g. a
+long-shot customer with low lifetime value can have a *negative* expected
+value for an otherwise-recommended action — a concrete "don't bother"
+signal a pure classification score never gives you.
+
+Scaled to the whole test set as a sanity check: at the default 20%
+effectiveness and a $15 action cost, the 506 correctly-flagged churners
+(true positives) versus 115 false alarms in the confusion matrix above
+imply `(506 × 0.20 × avg. monetary) − (621 × $15)` — plug in real
+numbers for your business via the app rather than trusting a single
+worked example here.
 
 ## 6. Limitations and what I'd do with more time
 
@@ -313,7 +345,7 @@ Ranked by mean absolute SHAP value across the test set:
 | Experiment tracking | MLflow |
 | Explainability | SHAP (TreeExplainer) |
 | GenAI | Google Gemini API (`google-genai`, free tier) — generation + `gemini-embedding-001` for the RAG assistant |
-| App | Streamlit |
+| App | Streamlit, Altair (charts) |
 | Testing / CI | pytest, GitHub Actions |
 | Everything else | Python 3.11 |
 
@@ -460,7 +492,8 @@ To deploy your own copy:
 │   ├── explain.py          # Stage 3: SHAP per-customer explanations
 │   ├── genai_advisor.py    # Stage 4: Gemini explanation + guardrailed action
 │   ├── rag_assistant.py    # RAG Q&A over the project's own analysis
-│   └── app.py               # Streamlit UI (customer explorer + RAG tab)
+│   ├── segments.py         # parses sql/QUERY_RESULTS.md for the Segment analysis tab
+│   └── app.py               # Streamlit UI (4 tabs: risk explorer, segments, model perf, RAG)
 ├── .streamlit/
 │   ├── config.toml          # app theme (colors, font)
 │   └── secrets.toml.example

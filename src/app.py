@@ -28,8 +28,10 @@ import altair as alt
 import joblib
 import pandas as pd
 import streamlit as st
+from sklearn.metrics import f1_score, precision_recall_curve, precision_score, recall_score
 
 from config import (
+    ALLOWED_ACTIONS,
     FEATURE_COLUMNS,
     ID_COLUMN,
     METRICS_PATH,
@@ -41,6 +43,7 @@ from config import (
 from explain import get_top_factors
 from genai_advisor import generate_customer_explanation
 from rag_assistant import answer_question, load_or_build_index
+from segments import load_churn_by_country, load_recency_risk_tiers
 
 st.set_page_config(page_title="Churn Predictor & Retention Advisor", layout="wide")
 
@@ -81,8 +84,23 @@ h1 { letter-spacing: -0.02em; }
     padding: 0.18rem 0.6rem; font-size: 0.74rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     margin: 0.2rem 0.35rem 0.2rem 0;
 }
+
+.ev-positive { color: #166534; }
+.ev-negative { color: #B91C1C; }
 </style>
 """
+
+# Illustrative placeholder costs (USD) for each guardrailed retention action --
+# not real campaign data (this project has none), just plausible orders of
+# magnitude so the ROI calculator below has a sensible starting point. Meant
+# to be overridden with a real cost in the number input.
+DEFAULT_ACTION_COST = {
+    "send discount offer": 15.0,
+    "proactive support call": 20.0,
+    "loyalty upgrade": 30.0,
+    "re-engagement email": 2.0,
+    "no action needed": 0.0,
+}
 
 
 def _escape_markdown_dollars(text):
@@ -258,6 +276,150 @@ def render_customer_explorer(model_bundle, shap_bundle, predictions, test_featur
                 st.markdown(f'<div class="action-pill">{result["recommended_action"]}</div>', unsafe_allow_html=True)
                 st.write(_escape_markdown_dollars(result["explanation"]))
 
+    st.subheader("Estimated ROI of intervening")
+    st.caption(
+        "A simplified expected-value model: "
+        "**effectiveness x churn probability x lifetime value − cost**. "
+        "Effectiveness (how often this action actually retains an at-risk customer) isn't "
+        "something this project has real data for -- adjust the slider to your own campaign "
+        "numbers; lifetime value uses this customer's historical spend as a proxy for future value."
+    )
+    roi_col1, roi_col2 = st.columns(2)
+    with roi_col1:
+        action = st.selectbox("Retention action", ALLOWED_ACTIONS, key="roi_action")
+        cost = st.number_input(
+            "Cost of this action ($)",
+            min_value=0.0,
+            value=DEFAULT_ACTION_COST[action],
+            step=1.0,
+            key="roi_cost",
+        )
+    with roi_col2:
+        effectiveness_pct = st.slider(
+            "Assumed effectiveness (% of at-risk customers this action retains)",
+            min_value=0,
+            max_value=100,
+            value=20,
+            step=5,
+            key="roi_effectiveness",
+        )
+        expected_value = (effectiveness_pct / 100) * prob * feature_row["monetary"] - cost
+        ev_class = "ev-positive" if expected_value >= 0 else "ev-negative"
+        sign = "+" if expected_value >= 0 else "−"
+        st.markdown(
+            f'<div class="mini-label">Expected value of intervening</div>'
+            f'<div class="prob-value {ev_class}">{sign}${abs(expected_value):,.2f}</div>',
+            unsafe_allow_html=True,
+        )
+
+
+def render_segment_analysis():
+    st.caption(
+        "Computed via SQL against the same cleaned dataset the model trains on -- see "
+        "`sql/` for the queries and `sql/QUERY_RESULTS.md` for the full committed output."
+    )
+
+    st.subheader("Churn rate by country")
+    st.caption("Countries with at least 20 customers, so the rate is statistically meaningful.")
+    country_df = load_churn_by_country()
+    country_chart = (
+        alt.Chart(country_df)
+        .mark_bar(cornerRadiusEnd=4, color="#4338CA")
+        .encode(
+            x=alt.X("churn_rate_pct:Q", title="Churn rate (%)"),
+            y=alt.Y("country:N", sort="-x", title=None),
+            tooltip=[
+                alt.Tooltip("country:N", title="Country"),
+                alt.Tooltip("num_customers:Q", title="Customers"),
+                alt.Tooltip("churn_rate_pct:Q", title="Churn rate (%)"),
+                alt.Tooltip("total_revenue:Q", title="Total revenue", format=",.0f"),
+            ],
+        )
+    )
+    st.altair_chart(country_chart, use_container_width=True)
+
+    st.subheader("Revenue by recency-risk tier")
+    st.caption("A simple 'traffic light' segmentation a retention team can act on directly.")
+    tier_df = load_recency_risk_tiers()
+    tier_chart = (
+        alt.Chart(tier_df)
+        .mark_bar(cornerRadiusEnd=4, color="#16A34A")
+        .encode(
+            x=alt.X("total_revenue:Q", title="Total revenue ($)"),
+            y=alt.Y("risk_tier:N", sort=None, title=None),
+            tooltip=[
+                alt.Tooltip("risk_tier:N", title="Tier"),
+                alt.Tooltip("num_customers:Q", title="Customers"),
+                alt.Tooltip("avg_customer_value:Q", title="Avg. customer value", format=",.0f"),
+                alt.Tooltip("total_revenue:Q", title="Total revenue", format=",.0f"),
+            ],
+        )
+    )
+    st.altair_chart(tier_chart, use_container_width=True)
+
+
+def render_model_performance(predictions):
+    st.caption(
+        "The app flags a customer as 'at risk' above a 0.5 churn-probability threshold by "
+        "default. That threshold is a business decision, not a statistical fact -- raising it "
+        "trades recall for precision (fewer false alarms, but more missed at-risk customers) "
+        "and vice versa. Explore that tradeoff here."
+    )
+
+    y_true = predictions["y_true"].to_numpy()
+    y_prob = predictions["churn_probability"].to_numpy()
+
+    precision_vals, recall_vals, thresholds = precision_recall_curve(y_true, y_prob)
+    curve_df = pd.concat(
+        [
+            pd.DataFrame({"threshold": thresholds, "value": precision_vals[:-1], "metric": "Precision"}),
+            pd.DataFrame({"threshold": thresholds, "value": recall_vals[:-1], "metric": "Recall"}),
+        ]
+    )
+    curve_chart = (
+        alt.Chart(curve_df)
+        .mark_line()
+        .encode(
+            x=alt.X("threshold:Q", title="Decision threshold"),
+            y=alt.Y("value:Q", title="Score", scale=alt.Scale(domain=[0, 1])),
+            color=alt.Color(
+                "metric:N",
+                title=None,
+                scale=alt.Scale(domain=["Precision", "Recall"], range=["#4338CA", "#EA580C"]),
+                legend=alt.Legend(orient="top", title=None),
+            ),
+        )
+    )
+    st.altair_chart(curve_chart, use_container_width=True)
+
+    threshold = st.slider(
+        "Pick a decision threshold to inspect",
+        min_value=0.0,
+        max_value=1.0,
+        value=0.5,
+        step=0.01,
+        key="perf_threshold",
+    )
+    y_pred_at_threshold = (y_prob >= threshold).astype(int)
+    tn = int(((y_true == 0) & (y_pred_at_threshold == 0)).sum())
+    fp = int(((y_true == 0) & (y_pred_at_threshold == 1)).sum())
+    fn = int(((y_true == 1) & (y_pred_at_threshold == 0)).sum())
+    tp = int(((y_true == 1) & (y_pred_at_threshold == 1)).sum())
+
+    metric_col1, metric_col2, metric_col3 = st.columns(3)
+    metric_col1.metric("Precision", f"{precision_score(y_true, y_pred_at_threshold, zero_division=0):.3f}")
+    metric_col2.metric("Recall", f"{recall_score(y_true, y_pred_at_threshold, zero_division=0):.3f}")
+    metric_col3.metric("F1", f"{f1_score(y_true, y_pred_at_threshold, zero_division=0):.3f}")
+
+    confusion_df = pd.DataFrame(
+        {
+            "": ["Actual: not churned", "Actual: churned"],
+            "Predicted: not at risk": [tn, fn],
+            "Predicted: at risk": [fp, tp],
+        }
+    )
+    st.dataframe(confusion_df, use_container_width=True, hide_index=True)
+
 
 EXAMPLE_QUESTIONS = [
     "Which customer segment has the highest churn risk and why?",
@@ -332,10 +494,16 @@ def main():
     )
     st.sidebar.markdown("[Source on GitHub](https://github.com/Daton-Star/churn-predictor-retention-advisor)")
 
-    tab1, tab2 = st.tabs(["Customer risk explorer", "Ask the analysis"])
+    tab1, tab2, tab3, tab4 = st.tabs(
+        ["Customer risk explorer", "Segment analysis", "Model performance", "Ask the analysis"]
+    )
     with tab1:
         render_customer_explorer(model_bundle, shap_bundle, predictions, test_features)
     with tab2:
+        render_segment_analysis()
+    with tab3:
+        render_model_performance(predictions)
+    with tab4:
         render_ask_the_analysis()
 
 
