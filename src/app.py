@@ -387,7 +387,7 @@ def render_customer_explorer(model_bundle, shap_bundle, predictions, test_featur
         st.stop()
 
     options = [
-        f"Customer {row.customer_id}  —  {row.churn_probability:.0%} churn probability"
+        f"Customer {row.customer_id}  —  {row.churn_probability:.1%} churn probability"
         for row in at_risk.itertuples()
     ]
     id_lookup = dict(zip(options, at_risk["customer_id"]))
